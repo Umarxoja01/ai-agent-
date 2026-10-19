@@ -1,8 +1,8 @@
 # Jarvis: shu ishda yozilgan barcha kod
 
-- Repo: jarvis-project, holat 5f2088b (asos 6d300b3 - bilak qatlamidan oldingi commit)
-- Yangi fayllar: 55 (to'liq matni bilan); o'zgartirilgan mavjud fayllar: 22 (faqat farqi)
-- Jami qator: 8966 (yangi fayllar + qo'shilgan qatorlar)
+- Repo: jarvis-project, holat aa95e9e (asos 6d300b3 - bilak qatlamidan oldingi commit)
+- Yangi fayllar: 55 (to'liq matni bilan); o'zgartirilgan mavjud fayllar: 26 (faqat farqi)
+- Jami qator: 9048 (yangi fayllar + qo'shilgan qatorlar)
 - Hujjatlar (*.md: VERIFICATION, README, HANDOFF, docs/) kirmagan.
 - Bu o'qish va saqlash uchun nusxa. Jarvis o'zi modullarga bo'lingan holda ishlaydi (Module Protocol V1); bu faylni ishga tushirib bo'lmaydi.
 - Qayta yaratish: `node scripts/export-code-bundle.mjs 6d300b3 <fayl.md>`
@@ -34,9 +34,12 @@
   - [tools/adobe-executor/index.ts](#tools-adobe-executor-index-ts) — mavjud fayl, +27 / -11 qator
   - [tools/adobe-executor/reference-assets.ts](#tools-adobe-executor-reference-assets-ts) — mavjud fayl, +6 / -1 qator
   - [tools/adobe-executor/reference-vision.ts](#tools-adobe-executor-reference-vision-ts) — mavjud fayl, +5 / -0 qator
-  - [tools/autonomous-production/index.ts](#tools-autonomous-production-index-ts) — mavjud fayl, +1 / -1 qator
+  - [tools/autonomous-production/index.ts](#tools-autonomous-production-index-ts) — mavjud fayl, +2 / -2 qator
+  - [tools/prompt-director/index.ts](#tools-prompt-director-index-ts) — mavjud fayl, +1 / -1 qator
+  - [tools/self-correction/index.ts](#tools-self-correction-index-ts) — mavjud fayl, +1 / -1 qator
   - [tools/smart-router/index.ts](#tools-smart-router-index-ts) — mavjud fayl, +33 / -11 qator
   - [tools/video-generator/index.ts](#tools-video-generator-index-ts) — mavjud fayl, +14 / -1 qator
+  - [tools/visual/index.ts](#tools-visual-index-ts) — mavjud fayl, +42 / -7 qator
 - **Dashboard**
   - [dashboard/app.ts](#dashboard-app-ts) — yangi, 396 qator
   - [dashboard/public/control.js](#dashboard-public-control-js) — yangi, 133 qator
@@ -92,6 +95,7 @@
   - [test/prompt-director-v5.test.ts](#test-prompt-director-v5-test-ts) — mavjud fayl, +8 / -1 qator
   - [test/smart-router.test.ts](#test-smart-router-test-ts) — mavjud fayl, +61 / -6 qator
   - [test/video-generator-adapter.test.ts](#test-video-generator-adapter-test-ts) — mavjud fayl, +13 / -1 qator
+  - [test/visual-critic.test.ts](#test-visual-critic-test-ts) — mavjud fayl, +37 / -0 qator
 
 ## Yadro (core/src)
 
@@ -5317,11 +5321,11 @@ index 6cdefd2..8d6b88e 100644
 
 ### tools/autonomous-production/index.ts
 
-Mavjud Jarvis fayli: faqat shu ishdagi o'zgarishlar (+1 / -1).
+Mavjud Jarvis fayli: faqat shu ishdagi o'zgarishlar (+2 / -2).
 
 ```diff
 diff --git a/tools/autonomous-production/index.ts b/tools/autonomous-production/index.ts
-index 74df7ea..59fb1d8 100644
+index 74df7ea..96ae7b5 100644
 --- a/tools/autonomous-production/index.ts
 +++ b/tools/autonomous-production/index.ts
 @@ -21,7 +21,7 @@ const ChangeSchema = z.object({ domain: z.string().min(1), from: z.string().opti
@@ -5333,6 +5337,55 @@ index 74df7ea..59fb1d8 100644
  const BriefSchema = z.object({
    idea: z.string().min(3), objective: z.string().optional(), audience: z.string().optional(),
    durationSeconds: z.number().min(1).max(300).optional(), format: z.enum(FORMATS).default('9:16'),
+@@ -410,7 +410,7 @@ export function createAutonomousProductionModule(registry: ModuleRegistry, jarvi
+       dependencies: ['creative-director','self-correction-loop','video-generator-adapter','error-memory-prevention'],
+       mayCall: ['creative_director_build_manifest','creative_director_quality_check','creative_director_get_manifest','self_correction_start','self_correction_review','video_generator_status','video_generator_submit','video_generator_poll','error_memory_preflight'],
+       priority: 99,
+-      timeoutMs: 240000,
++      timeoutMs: 420_000, // a self_correction_review (330 s) runs inside
+       maxRetries: 0,
+       memoryNamespace: 'autonomous-production-v8',
+       sideEffects: 'write',
+```
+
+### tools/prompt-director/index.ts
+
+Mavjud Jarvis fayli: faqat shu ishdagi o'zgarishlar (+1 / -1).
+
+```diff
+diff --git a/tools/prompt-director/index.ts b/tools/prompt-director/index.ts
+index 14397d6..3ab3ee2 100644
+--- a/tools/prompt-director/index.ts
++++ b/tools/prompt-director/index.ts
+@@ -401,7 +401,7 @@ export function createPromptDirectorModule(registry: ModuleRegistry): Module {
+       produces: ['directed shot plans, production prompt packages, critic-driven revisions and QC'],
+       dependencies: ['story-engine','continuity-engine','prompt-engine','smart-ai-router','visual-critic','error-memory-prevention'],
+       mayCall: ['story_build_blueprint','story_quality_check','continuity_gate_check','prompt_build','prompt_learned_build','prompt_score','prompt_improve','ai_route_plan','ai_route_execute','visual_critic_analyze','visual_critic_learn','error_memory_preflight','error_memory_record'],
+-      priority: 95, timeoutMs: 120000, maxRetries: 1,
++      priority: 95, timeoutMs: 330_000, maxRetries: 1, // fits a local Visual Critic analysis (270 s)
+       memoryNamespace: 'none', sideEffects: 'mixed',
+     }),
+     tools: [status, plan, pack, revise, qc, semanticEvaluateTool],
+```
+
+### tools/self-correction/index.ts
+
+Mavjud Jarvis fayli: faqat shu ishdagi o'zgarishlar (+1 / -1).
+
+```diff
+diff --git a/tools/self-correction/index.ts b/tools/self-correction/index.ts
+index a601a89..a57ae8e 100644
+--- a/tools/self-correction/index.ts
++++ b/tools/self-correction/index.ts
+@@ -288,7 +288,7 @@ export function createSelfCorrectionModule(registry: ModuleRegistry, jarvisHome:
+       dependencies: ['prompt-director'],
+       mayCall: ['prompt_director_revise_from_critic','visual_critic_analyze','visual_critic_learn'],
+       priority: 97,
+-      timeoutMs: 120000,
++      timeoutMs: 330_000, // a local Visual Critic analysis alone may take up to 270 s
+       maxRetries: 0,
+       memoryNamespace: 'self-correction-v6',
+       sideEffects: 'mixed',
 ```
 
 ### tools/smart-router/index.ts
@@ -5517,6 +5570,109 @@ index 28a6c45..e5ede4d 100644
    const body: any = { prompt: p.prompt };
    if (isKling) {
 ```
+
+### tools/visual/index.ts
+
+Mavjud Jarvis fayli: faqat shu ishdagi o'zgarishlar (+42 / -7).
+
+````diff
+diff --git a/tools/visual/index.ts b/tools/visual/index.ts
+index 09cf3ed..f8f91af 100644
+--- a/tools/visual/index.ts
++++ b/tools/visual/index.ts
+@@ -26,7 +26,11 @@ export interface VisualCriticOptions {
+   ollamaBaseUrl?: string;
+   /** Hard timeout for the lightweight Ollama status/tags check (ms). */
+   networkTimeoutMs?: number;
+-  /** Hard timeout for the multimodal vision analysis call (ms); vision is slower than a plain chat call. */
++  /**
++   * Hard timeout for the local multimodal analysis (ms). On Umar's PC qwen3-vl:4b
++   * (4.3 GB, partly offloaded to the CPU) needed ~110 s for 6 frames on 2026-10-19,
++   * so the default is OLLAMA_VISION_TIMEOUT_MS or 240 s, not the 45 s cloud vision default.
++   */
+   visionTimeoutMs?: number;
+ }
+ 
+@@ -44,7 +48,12 @@ const ExtractSchema = z.object({
+   frameCount: z.number().int().min(2).max(12).default(6),
+   width: z.number().int().min(320).max(1280).default(768),
+ });
++// qwen3-vl reasons before it answers (even with think:false), so the local critic
++// sends fewer, smaller frames than plain extraction: on Umar's PC (4 GB GPU) every
++// image token also costs decode speed. Callers can still ask for more.
+ const CriticSchema = ExtractSchema.extend({
++  frameCount: z.number().int().min(2).max(12).default(4),
++  width: z.number().int().min(320).max(1280).default(640),
+   generationModel: z.enum(MODELS).default('generic'),
+   prompt: z.string().min(10).optional(),
+   goal: z.string().min(3).optional(),
+@@ -137,6 +146,27 @@ function parseAnalysis(text: string): CriticAnalysis {
+   const clean = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+   return AnalysisSchema.parse(JSON.parse(clean));
+ }
++/**
++ * The verdict's shape, sent to Ollama as `format` (structured output): with plain
++ * format:'json' qwen3-vl:4b once returned worked:[true, ...] on the PC (2026-10-19).
++ */
++const METRIC_KEYS = ['identity', 'motion', 'camera', 'composition', 'artifacts', 'adherence'] as const;
++const VERDICT_JSON_SCHEMA = {
++  type: 'object',
++  properties: {
++    overall: { type: 'number' },
++    metrics: { type: 'object', properties: Object.fromEntries(METRIC_KEYS.map(key => [key, { type: 'number' }])), required: [...METRIC_KEYS] },
++    worked: { type: 'array', items: { type: 'string' } },
++    failed: { type: 'array', items: { type: 'string' } },
++    summary: { type: 'string' },
++    recommendations: { type: 'array', items: { type: 'string' } },
++  },
++  required: ['overall', 'metrics', 'worked', 'failed', 'summary', 'recommendations'],
++};
++
++/** Tokens for reasoning + the JSON verdict (the reasoning alone was ~300-800 tokens). */
++const VISION_NUM_PREDICT = Number(process.env.OLLAMA_VISION_NUM_PREDICT) > 0 ? Number(process.env.OLLAMA_VISION_NUM_PREDICT) : 2048;
++
+ async function callVision(
+   p: z.infer<typeof CriticSchema>,
+   frames: string[],
+@@ -172,9 +202,12 @@ async function callVision(
+       model: p.criticModel ?? defaultModel,
+       messages: [{ role: 'user', content: prompt, images }],
+       stream: false,
+-      think: false,
+-      format: 'json',
+-      options: { temperature: 0.1, num_ctx: images.length <= 6 ? 8192 : 16384, num_predict: 512 },
++      // qwen3-vl:4b thinks even with think:false and then had no budget left for the
++      // JSON (empty answer, 2026-10-19). think:true keeps the reasoning in
++      // message.thinking, and the budget covers reasoning + answer.
++      think: true,
++      format: VERDICT_JSON_SCHEMA,
++      options: { temperature: 0.1, num_ctx: images.length <= 4 ? 8192 : images.length <= 8 ? 12288 : 16384, num_predict: VISION_NUM_PREDICT },
+     }),
+   }, visionTimeoutMs);
+   const data: any = await response.json();
+@@ -224,7 +257,7 @@ export function createVisualCriticModule(jarvisHome: string, options: VisualCrit
+   const criticModel = options.criticModel ?? process.env.OLLAMA_VISION_MODEL ?? 'qwen3-vl:4b';
+   const ollamaBaseUrl = options.ollamaBaseUrl ?? process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434';
+   const networkTimeoutMs = options.networkTimeoutMs ?? DEFAULT_NETWORK_TIMEOUT_MS;
+-  const visionTimeoutMs = options.visionTimeoutMs ?? DEFAULT_VISION_TIMEOUT_MS;
++  const visionTimeoutMs = options.visionTimeoutMs ?? (Number(process.env.OLLAMA_VISION_TIMEOUT_MS) > 0 ? Number(process.env.OLLAMA_VISION_TIMEOUT_MS) : 240_000);
+ 
+   const status: Tool = {
+     name: 'visual_critic_status',
+@@ -297,8 +330,10 @@ export function createVisualCriticModule(jarvisHome: string, options: VisualCrit
+       dependencies: ['prompt-engine'],
+       mayCall: ['prompt-engine'],
+       priority: 75,
+-      timeoutMs: 60000,
+-      maxRetries: 1,
++      // the local analysis (up to 240 s) must fit; no automatic retry: a timed-out
++      // request keeps the GPU busy, so a retry would only queue behind it
++      timeoutMs: 270_000,
++      maxRetries: 0,
+       memoryNamespace: 'visual-critic',
+       sideEffects: 'mixed',
+     }),
+````
 
 ## Dashboard
 
@@ -10225,4 +10381,57 @@ index 978855d..d850223 100644
    it('still supports an explicit Veo3-family MUAPI model with the images_list array body shape', async () => {
      const home = await mkdtemp(join(tmpdir(), 'jarvis-muapi-veo-'));
      const fakeFetch: typeof fetch = async (input, init) => {
+```
+
+### test/visual-critic.test.ts
+
+Mavjud Jarvis fayli: faqat shu ishdagi o'zgarishlar (+37 / -0).
+
+```diff
+diff --git a/test/visual-critic.test.ts b/test/visual-critic.test.ts
+index 81bb480..9c92cb5 100644
+--- a/test/visual-critic.test.ts
++++ b/test/visual-critic.test.ts
+@@ -67,4 +67,41 @@ describe('Visual Critic V3', () => {
+     expect(memory[0].source).toBe('visual-critic-v3');
+     expect(memory[0].failed).toContain('minor hand artifact');
+   });
++
++  it('local critic defaults: 4 frames at 640 px, thinking kept apart, budget for reasoning + JSON, no auto-retry', async () => {
++    const home = await mkdtemp(join(tmpdir(), 'jarvis-visual-'));
++    const video = join(home, 'sample-defaults.mp4');
++    await execFileAsync('ffmpeg', [
++      '-hide_banner','-loglevel','error','-y','-f','lavfi','-i','testsrc=size=1280x720:rate=10',
++      '-t','1','-pix_fmt','yuv420p',video,
++    ]);
++    const bodies: any[] = [];
++    const inner = mockFetch();
++    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => { bodies.push(JSON.parse(String(init?.body))); return inner(input, init); }) as typeof fetch;
++    const module = createVisualCriticModule(home, { fetchImpl, ollamaBaseUrl: 'http://mock-ollama' });
++    const result = await module.tools.find(t => t.name === 'visual_critic_analyze')!.execute({ videoPath: video });
++    expect(result.success).toBe(true);
++    expect(result.data.frames).toHaveLength(4);
++    expect(result.data.media.width).toBe(1280);
++    expect(bodies[0]).toMatchObject({ think: true, options: { num_ctx: 8192, num_predict: 2048 } });
++    // structured output: the verdict's types are enforced while the model writes
++    expect(bodies[0].format).toMatchObject({ type: 'object', properties: { worked: { type: 'array', items: { type: 'string' } } } });
++    expect(bodies[0].format.required).toEqual(['overall', 'metrics', 'worked', 'failed', 'summary', 'recommendations']);
++    expect(bodies[0].messages[0].images).toHaveLength(4);
++    expect(module.protocol.maxRetries).toBe(0);
++    expect(module.protocol.timeoutMs).toBeGreaterThanOrEqual(240_000);
++  });
++
++  it('reads the verdict from the thinking field when the answer field is empty', async () => {
++    const home = await mkdtemp(join(tmpdir(), 'jarvis-visual-'));
++    const video = join(home, 'sample-think.mp4');
++    await execFileAsync('ffmpeg', ['-hide_banner','-loglevel','error','-y','-f','lavfi','-i','testsrc=size=320x240:rate=10','-t','1','-pix_fmt','yuv420p',video]);
++    const verdict = { overall: 7, metrics: { identity: 7, motion: 7, camera: 7, composition: 7, artifacts: 7, adherence: 7 }, worked: ['a'], failed: [], summary: 's', recommendations: [] };
++    const fetchImpl = (async () => new Response(JSON.stringify({ message: { content: '', thinking: `Let me look... ${JSON.stringify(verdict)}` } }), { status: 200 })) as typeof fetch;
++    const module = createVisualCriticModule(home, { fetchImpl, ollamaBaseUrl: 'http://mock-ollama' });
++    const result = await module.tools.find(t => t.name === 'visual_critic_analyze')!.execute({ videoPath: video, frameCount: 2, width: 320 });
++    expect(result.success).toBe(true);
++    expect(result.data.analysis.overall).toBe(7);
++  });
+ });
++
 ```
