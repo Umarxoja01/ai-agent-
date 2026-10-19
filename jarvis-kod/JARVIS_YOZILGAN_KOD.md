@@ -1,8 +1,8 @@
 # Jarvis: shu ishda yozilgan barcha kod
 
-- Repo: jarvis-project, holat aa95e9e (asos 6d300b3 - bilak qatlamidan oldingi commit)
-- Yangi fayllar: 55 (to'liq matni bilan); o'zgartirilgan mavjud fayllar: 26 (faqat farqi)
-- Jami qator: 9048 (yangi fayllar + qo'shilgan qatorlar)
+- Repo: jarvis-project, holat a5611dc (asos 6d300b3 - bilak qatlamidan oldingi commit)
+- Yangi fayllar: 58 (to'liq matni bilan); o'zgartirilgan mavjud fayllar: 26 (faqat farqi)
+- Jami qator: 9467 (yangi fayllar + qo'shilgan qatorlar)
 - Hujjatlar (*.md: VERIFICATION, README, HANDOFF, docs/) kirmagan.
 - Bu o'qish va saqlash uchun nusxa. Jarvis o'zi modullarga bo'lingan holda ishlaydi (Module Protocol V1); bu faylni ishga tushirib bo'lmaydi.
 - Qayta yaratish: `node scripts/export-code-bundle.mjs 6d300b3 <fayl.md>`
@@ -41,7 +41,7 @@
   - [tools/video-generator/index.ts](#tools-video-generator-index-ts) — mavjud fayl, +14 / -1 qator
   - [tools/visual/index.ts](#tools-visual-index-ts) — mavjud fayl, +42 / -7 qator
 - **Dashboard**
-  - [dashboard/app.ts](#dashboard-app-ts) — yangi, 396 qator
+  - [dashboard/app.ts](#dashboard-app-ts) — yangi, 543 qator
   - [dashboard/public/control.js](#dashboard-public-control-js) — yangi, 133 qator
   - [dashboard/public/app.js](#dashboard-public-app-js) — mavjud fayl, +2 / -2 qator
   - [dashboard/public/index.html](#dashboard-public-index-html) — mavjud fayl, +1 / -0 qator
@@ -49,10 +49,12 @@
   - [dashboard/server.ts](#dashboard-server-ts) — mavjud fayl, +40 / -87 qator
 - **Ishga tushirish va sozlama (main.ts, config, .env.example)**
   - [config/pricing.template.json](#config-pricing-template-json) — yangi, 16 qator
-  - [.env.example](#-env-example) — mavjud fayl, +4 / -0 qator
+  - [.env.example](#-env-example) — mavjud fayl, +8 / -0 qator
   - [main.ts](#main-ts) — mavjud fayl, +36 / -0 qator
   - [vitest.config.ts](#vitest-config-ts) — mavjud fayl, +1 / -0 qator
 - **Skriptlar (scripts/)**
+  - [scripts/chat-live-test.mjs](#scripts-chat-live-test-mjs) — yangi, 26 qator
+  - [scripts/chat-local-bench.mjs](#scripts-chat-local-bench-mjs) — yangi, 41 qator
   - [scripts/export-code-bundle.mjs](#scripts-export-code-bundle-mjs) — yangi, 79 qator
   - [scripts/install-jarvis-daemon.ps1](#scripts-install-jarvis-daemon-ps1) — yangi, 14 qator
   - [scripts/install-n8n.ps1](#scripts-install-n8n-ps1) — yangi, 76 qator
@@ -72,12 +74,13 @@
   - [scripts/phase8-verify.ps1](#scripts-phase8-verify-ps1) — yangi, 43 qator
   - [scripts/phase9-verify.ps1](#scripts-phase9-verify-ps1) — yangi, 42 qator
   - [scripts/poll-jobs.mjs](#scripts-poll-jobs-mjs) — yangi, 88 qator
+  - [scripts/setup-telegram.ps1](#scripts-setup-telegram-ps1) — yangi, 94 qator
   - [scripts/uninstall-jarvis-daemon.ps1](#scripts-uninstall-jarvis-daemon-ps1) — yangi, 9 qator
   - [scripts/uninstall-n8n.ps1](#scripts-uninstall-n8n-ps1) — yangi, 9 qator
 - **Testlar (test/)**
   - [test/approval-gate.test.ts](#test-approval-gate-test-ts) — yangi, 329 qator
   - [test/assistant.test.ts](#test-assistant-test-ts) — yangi, 229 qator
-  - [test/dashboard.test.ts](#test-dashboard-test-ts) — yangi, 293 qator
+  - [test/dashboard.test.ts](#test-dashboard-test-ts) — yangi, 400 qator
   - [test/dev-agent.test.ts](#test-dev-agent-test-ts) — yangi, 208 qator
   - [test/farm.test.ts](#test-farm-test-ts) — yangi, 172 qator
   - [test/file-lock.test.ts](#test-file-lock-test-ts) — yangi, 35 qator
@@ -5678,7 +5681,7 @@ index 09cf3ed..f8f91af 100644
 
 ### dashboard/app.ts
 
-Yangi fayl, 396 qator.
+Yangi fayl, 543 qator.
 
 ```ts
 // ===================================================================
@@ -5695,8 +5698,12 @@ Yangi fayl, 396 qator.
 //   - task_confirm_step is a UI-only tool: the model can never confirm
 //   - task steps the model writes or runs may only name model tools, so a
 //     task cannot carry the model past its own allow-list
-//   - chat: OpenAI Responses API function calling, at most MAX_TOOL_CALLS
-//     tool calls per message; tool output goes back to the model as data
+//   - chat: OpenAI Responses API function calling when OPENAI_API_KEY and
+//     OPENAI_MODEL are set, otherwise the local Ollama model (no key, no
+//     cost, works while KILL is on) over a smaller tool list; both go
+//     through the same allow-list and pending-action rules, at most
+//     MAX_TOOL_CALLS tool calls per message; tool output goes back to the
+//     model as data
 //   - POST /hook/n8n: n8n -> Jarvis events with a separate token
 //     (<JARVIS_HOME>/n8n/inbound/token) and a short tool allow-list
 //     (intake, reminders, tasks without steps, read-only overviews)
@@ -5713,6 +5720,7 @@ import type { ToolResult } from '../core/src/types.js';
 import { maskSensitive } from '../core/src/audit.js';
 import { wrapUntrusted } from '../core/src/untrusted.js';
 import { cloudPreflight, meterCloudCall, usageFrom } from '../core/src/metering.js';
+import { fetchWithTimeout } from '../core/src/net.js';
 
 export const READ_TOOLS = [
   'jarvis_health', 'hands_status', 'pricing_status', 'spend_report', 'module_protocol_status',
@@ -5731,6 +5739,17 @@ export const WRITE_TOOLS = [
 export const PENDING_TOOLS = ['telegram_send', 'dev_workspace_remove', 'n8n_trigger'] as const;
 /** What an n8n workflow may ask Jarvis to do (POST /hook/n8n). Text it brings is data. */
 export const INBOUND_TOOLS = ['assistant_intake', 'reminder_set', 'task_create', 'tasks_overview', 'assistant_today', 'reminder_list', 'jarvis_health'] as const;
+/**
+ * The local model gets fewer, shorter tool definitions: a 4B model on the PC
+ * stays fast and on target with ~20 tools. Farm health/feed records, SMM
+ * writes and task_run_next stay with the control panel or Claude.
+ */
+export const LOCAL_CHAT_TOOLS = [
+  'jarvis_health', 'hands_status', 'spend_report', 'tasks_overview', 'task_list', 'task_get', 'assistant_today', 'reminder_list',
+  'farm_list', 'farm_summary', 'smm_brand_list', 'project_list', 'n8n_status',
+  'assistant_intake', 'task_create', 'task_update', 'reminder_set', 'reminder_cancel', 'telegram_notify',
+  'telegram_send',
+] as const;
 /** Only the human UI may call these (never offered to the model). */
 export const UI_ONLY_TOOLS = ['task_confirm_step'] as const;
 const MODEL_TOOLS = new Set<string>([...READ_TOOLS, ...WRITE_TOOLS, ...PENDING_TOOLS]);
@@ -5741,6 +5760,49 @@ const MAX_TOOL_CALLS = 6;
 const MAX_MESSAGE = 20_000;
 const MAX_BODY = 1_000_000;
 const RESULT_LIMIT = 6_000;
+const LOCAL_RESULT_LIMIT = 2_000;
+const NOTES_QUESTION = /obsidian|vault|qayd|zametk|yozuv|note/i;
+/**
+ * Facts a 4B model got wrong on the PC (KILL "yo'qilgan", configured hands
+ * listed as working), written by code from the tool result and appended to
+ * the local model's answer, above the model's own words.
+ */
+export function toolFacts(name: string, data: any): string | undefined {
+  if (!data || typeof data !== 'object') return undefined;
+  const count = (v: unknown) => Array.isArray(v) ? v.length : 0;
+  switch (name) {
+    case 'assistant_today':
+      return `Bugun (${data.date}): ${count(data.remindersToday)} ta eslatma, ${count(data.remindersOverdue)} ta o'tib ketgan eslatma, ${count(data.tasksDueToday)} ta bugungi vazifa, ${count(data.tasksOverdue)} ta muddati o'tgan vazifa, ${data.openTasks ?? 0} ta ochiq vazifa, ${count(data.awaitingApproval)} ta tasdiq kutyapti.`;
+    case 'jarvis_health':
+      return `KILL ${data.paused ? "YOQILGAN: yuborish, to'lov va qaytarib bo'lmaydigan amallar to'xtatilgan" : "o'chiq"}; ${data.modules} modul, ${data.tools} tool; oxirgi 24 soat: ${data.audit?.last24h?.calls ?? 0} chaqiruv, ${data.audit?.last24h?.errors ?? 0} xato.`;
+    case 'hands_status': {
+      const hands = (verdict: string) => (Array.isArray(data.hands) ? data.hands : []).filter((h: any) => h?.verdict === verdict).map((h: any) => h.hand).join(', ') || "yo'q";
+      return `Ishlayapti (real sinov bilan): ${hands('live')}. Sozlangan, lekin sinovsiz: ${hands('configured')}. Sozlanmagan: ${hands('not_configured')}. Tekshirilmagan: ${hands('unverified')}.`;
+    }
+    case 'spend_report':
+      return `Sarf (${data.period}): ${data.totalUsd} USD, ${data.calls} ta yozuv.`;
+  }
+  return undefined;
+}
+// facts first: on the PC the model's own wording contradicted them (configured hands listed as working)
+const withFacts = (reply: string, facts: string[]) => facts.length
+  ? `Aniq (tool natijasi):\n${facts.map(f => `- ${f}`).join('\n')}\n\nLokal model izohi (adashishi mumkin):\n${reply}`
+  : reply;
+
+/** Drops null / empty fields so a cut-off tool result still holds the facts (local model only). */
+function compact(value: unknown, depth = 0): unknown {
+  if (Array.isArray(value)) return value.map(v => compact(v, depth + 1)).filter(v => v !== undefined);
+  if (value && typeof value === 'object' && depth < 8) {
+    const out: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(value)) {
+      const c = compact(v, depth + 1);
+      if (c === undefined || c === null || c === '' || (Array.isArray(c) && !c.length)) continue;
+      out[key] = c;
+    }
+    return out;
+  }
+  return value;
+}
 const textTypes: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
 
 export interface PendingAction { id: string; tool: string; args: unknown; tier: string; reason: string; createdAt: string; status: 'pending' | 'running' | 'done' | 'failed' | 'canceled'; result?: unknown; error?: string }
@@ -5754,6 +5816,11 @@ export interface DashboardOptions {
   port: number;
   model?: string;
   apiKey?: string;
+  /** 'openai' | 'ollama' | 'auto' (default: OpenAI when key + model are set, otherwise the local Ollama model). */
+  chatProvider?: string;
+  ollamaBaseUrl?: string;
+  ollamaModel?: string;
+  ollamaTimeoutMs?: number;
   fetchImpl?: typeof fetch;
   now?: () => Date;
 }
@@ -5821,6 +5888,19 @@ export function createDashboard(options: DashboardOptions) {
   const fetchImpl = options.fetchImpl ?? fetch;
   const model = options.model ?? process.env.OPENAI_MODEL ?? '';
   const apiKey = options.apiKey ?? process.env.OPENAI_API_KEY ?? '';
+  const requestedProvider = (options.chatProvider ?? process.env.JARVIS_CHAT_PROVIDER ?? 'auto').trim().toLowerCase();
+  const provider: 'openai' | 'ollama' = requestedProvider === 'openai' || requestedProvider === 'ollama'
+    ? requestedProvider : (apiKey && model ? 'openai' : 'ollama');
+  const ollamaBaseUrl = (options.ollamaBaseUrl ?? process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434').replace(/\/$/, '');
+  const ollamaModel = options.ollamaModel ?? process.env.OLLAMA_CHAT_MODEL ?? process.env.OLLAMA_TEXT_MODEL ?? 'qwen3:4b';
+  const ollamaTimeoutMs = options.ollamaTimeoutMs ?? (Number(process.env.OLLAMA_CHAT_TIMEOUT_MS) > 0 ? Number(process.env.OLLAMA_CHAT_TIMEOUT_MS) : 120_000);
+  const ollamaNumCtx = Number(process.env.OLLAMA_CHAT_NUM_CTX) > 0 ? Number(process.env.OLLAMA_CHAT_NUM_CTX) : 8192;
+  // the PC's GPU writes ~15 tokens/s: a short answer is the difference between 20 s and a minute
+  const ollamaNumPredict = Number(process.env.OLLAMA_CHAT_NUM_PREDICT) > 0 ? Number(process.env.OLLAMA_CHAT_NUM_PREDICT) : 600;
+  // qwen3 reasons before answering; with think:false the reasoning leaks into
+  // the reply, so thinking stays on unless the model has no thinking mode.
+  let ollamaThink = process.env.OLLAMA_CHAT_THINK !== 'false';
+  const chatModel = provider === 'ollama' ? ollamaModel : model;
   const pending = new Map<string, PendingAction>();
   const allowedOrigins = new Set([`http://127.0.0.1:${options.port}`, `http://localhost:${options.port}`]);
   // DNS rebinding guard: a foreign domain pointed at 127.0.0.1 arrives with its own Host header.
@@ -5855,7 +5935,7 @@ export function createDashboard(options: DashboardOptions) {
   }
   const tierOf = (name: string) => registry.getToolTier(name) ?? 'read';
   const exists = (name: string) => Boolean(registry.getTool(name));
-  const trim = (v: unknown) => { const s = JSON.stringify(maskSensitive(v)) ?? 'null'; return s.length > RESULT_LIMIT ? `${s.slice(0, RESULT_LIMIT)}…(qisqartirildi)` : s; };
+  const trim = (v: unknown, limit = RESULT_LIMIT) => { const s = JSON.stringify(maskSensitive(v)) ?? 'null'; return s.length > limit ? `${s.slice(0, limit)}…(qisqartirildi)` : s; };
 
   /** Step tools named by a model's task_create / task_update / task_run_next call. */
   async function modelStepTools(name: string, args: any): Promise<string[]> {
@@ -5894,16 +5974,19 @@ export function createDashboard(options: DashboardOptions) {
   }
 
   // ---------------------------------------------------------------- chat
-  function toolDefs() {
-    return [...MODEL_TOOLS].filter(exists).map(name => {
+  /** compact: first sentence of the description only (local model). */
+  function toolSchemas(names: Iterable<string>, compact: boolean) {
+    return [...names].filter(exists).map(name => {
       const tool = registry.getTool(name)!;
       const schema = zodToJsonSchema(tool.inputSchema as any, { target: 'jsonSchema7' }) as Record<string, any>;
       const { $schema, ...parameters } = schema;
       if (parameters.type !== 'object') { parameters.type = 'object'; parameters.properties ??= {}; }
       const suffix = (PENDING_TOOLS as readonly string[]).includes(name) ? ' [Faqat TAKLIF: Umar dashboard tugmasi bilan tasdiqlaydi]' : '';
-      return { type: 'function', name, description: `${tool.description}${suffix}`.slice(0, 1_000), parameters };
+      const text = compact ? tool.description.split(/(?<=[.!?])\s/)[0].slice(0, 220) : tool.description;
+      return { name, description: `${text}${suffix}`.slice(0, 1_000), parameters };
     });
   }
+  const toolDefs = () => toolSchemas(MODEL_TOOLS, false).map(t => ({ type: 'function', ...t }));
   async function openai(payload: Record<string, unknown>) {
     if (options.jarvisHome) {
       const gate = cloudPreflight(options.jarvisHome, 'openai', model);
@@ -5919,20 +6002,112 @@ export function createDashboard(options: DashboardOptions) {
   }
   const outputText = (data: any) => data.output_text || (data.output ?? []).flatMap((o: any) => o.type === 'message' ? (o.content ?? []) : []).filter((c: any) => c.type === 'output_text').map((c: any) => c.text).join('\n');
 
+  /** Local model: no key, no cost, nothing leaves the PC, so KILL and the cloud price gate do not apply. */
+  async function ollama(messages: unknown[], tools: unknown[]): Promise<any> {
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(fetchImpl, `${ollamaBaseUrl}/api/chat`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: ollamaModel, stream: false, think: ollamaThink, messages, ...(tools.length ? { tools } : {}), options: { temperature: 0.2, num_ctx: ollamaNumCtx, ...(ollamaThink ? {} : { num_predict: ollamaNumPredict }) } }),
+      }, ollamaTimeoutMs);
+    } catch (error) {
+      if (error instanceof Error && error.name === 'TimeoutError') {
+        throw Object.assign(new Error(`Lokal model (${ollamaModel}) ${Math.round(ollamaTimeoutMs / 1000)} s ichida javob bermadi.`), { status: 504 });
+      }
+      throw Object.assign(new Error(`Lokal model javob bermadi (Ollama ${ollamaBaseUrl}): ${error instanceof Error ? error.message : String(error)}. Ollama ilovasi yoqilganini tekshiring.`), { status: 503 });
+    }
+    const data: any = await response.json().catch(() => ({}));
+    if (!response.ok || data?.error) {
+      const detail = String(data?.error ?? `HTTP ${response.status}`).slice(0, 300);
+      // a model without a thinking mode refuses think:true - ask once more without it
+      if (ollamaThink && /think/i.test(detail)) { ollamaThink = false; return ollama(messages, tools); }
+      throw Object.assign(new Error(`Lokal model (${ollamaModel}): ${detail}`), { status: 502 });
+    }
+    return data;
+  }
+  const localText = (content: unknown) => String(content ?? '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+
+  type ChatAction = { tool: string; tier: string; ok: boolean; ms: number; error?: string; steps?: string[] };
+  /** One tool call from any chat model, through the same gates: allow-list, task-step check, send tools only proposed. */
+  async function runModelCall(name: string, rawArgs: unknown, allowed: Set<string>, stepAllowed: Set<string>, message: string, actions: ChatAction[], proposals: PendingAction[]): Promise<unknown> {
+    if (!allowed.has(name) || !exists(name)) return { error: `Ruxsat yo'q: ${name}` };
+    let args: unknown = {};
+    if (typeof rawArgs === 'string') {
+      try { args = rawArgs ? JSON.parse(rawArgs) : {}; } catch { return { error: 'arguments JSON emas' }; }
+    } else if (rawArgs && typeof rawArgs === 'object') args = rawArgs;
+    if ((PENDING_TOOLS as readonly string[]).includes(name)) {
+      const action = propose(name, args, `chat: ${message.slice(0, 120)}`);
+      proposals.push(publicAction(action));
+      return { pending: true, actionId: action.id, note: 'Bajarilmadi. Umar dashboard\'da "Tasdiqlash" tugmasini bosishi kerak.' };
+    }
+    const steps = await modelStepTools(name, args);
+    const outside = steps.filter(step => !stepAllowed.has(step));
+    if (outside.length) {
+      actions.push({ tool: name, tier: tierOf(name), ok: false, ms: 0, error: `step tools outside allow-list: ${outside.join(', ')}`.slice(0, 200), steps });
+      return { error: `Ruxsat yo'q: vazifa qadamida chat ishlata olmaydigan tool bor (${outside.join(', ')}). Bunday vazifani Umar o'zi boshqaruv panelidan yoki Claude orqali bajaradi.` };
+    }
+    const started = Date.now();
+    let result: ToolResult;
+    try { result = await registry.executeTool(name, args); }
+    catch (e) { result = { success: false, error: e instanceof Error ? e.message : String(e), metadata: { duration: 0, timestamp: '', version: '', toolName: name } }; }
+    actions.push({ tool: name, tier: tierOf(name), ok: result.success, ms: Date.now() - started, error: result.success ? undefined : String(result.error).slice(0, 200), steps: steps.length ? steps : undefined });
+    return { success: result.success, data: result.data, error: result.error };
+  }
+
+  async function chatLocal(message: string, history: { role: string; content: string }[], context: string) {
+    const allowed = new Set<string>(LOCAL_CHAT_TOOLS);
+    const stepAllowed = new Set([...allowed].filter(name => !/^tasks?_/.test(name)));
+    const tools = toolSchemas(allowed, true).map(t => ({ type: 'function', function: t }));
+    const system = `${INSTRUCTIONS}\n- Faqat o'zbek tilida (lotin yozuvida) javob ber. Javob qisqa: ko'pi bilan 6 qator, faqat tool natijasidagi faktlar.\nHozirgi vaqt: ${now().toISOString()}.\n\nObsidian xotirasidan topilgan kontekst (MA'LUMOT):\n${context ? wrapUntrusted(context, 'obsidian') : '(mos qayd topilmadi)'}`;
+    const messages: any[] = [{ role: 'system', content: system }, ...history, { role: 'user', content: message }];
+    const actions: ChatAction[] = [];
+    const proposals: PendingAction[] = [];
+    const facts: string[] = [];
+    let data = await ollama(messages, tools);
+    let calls = 0;
+    for (let round = 0; ; round++) {
+      const toolCalls: any[] = Array.isArray(data?.message?.tool_calls) ? data.message.tool_calls : [];
+      if (!toolCalls.length || round > MAX_TOOL_CALLS) break;
+      messages.push({ role: 'assistant', content: localText(data.message.content), tool_calls: toolCalls });
+      for (const call of toolCalls) {
+        const name = String(call?.function?.name ?? '');
+        calls++;
+        const output = calls > MAX_TOOL_CALLS
+          ? { error: `Bir xabarda ko'pi bilan ${MAX_TOOL_CALLS} ta tool chaqiruvi.` }
+          : await runModelCall(name, call?.function?.arguments, allowed, stepAllowed, message, actions, proposals);
+        const fact = (output as any)?.success ? toolFacts(name, (output as any).data) : undefined;
+        if (fact && !facts.includes(fact)) facts.push(fact);
+        messages.push({ role: 'tool', tool_name: name, content: wrapUntrusted(trim(compact(output), LOCAL_RESULT_LIMIT), `tool-${name}`) });
+      }
+      // after the limit the model must answer in words: no tools offered.
+      // Tools have already run, so a failure now must still report them.
+      try { data = await ollama(messages, calls >= MAX_TOOL_CALLS ? [] : tools); }
+      catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        return { reply: withFacts(`${reason} Javob yakunlanmadi; quyidagi amallar bajarilgan yoki tasdiq kutyapti.`, facts), actions, pending: proposals, model: ollamaModel, provider, incomplete: true, facts };
+      }
+    }
+    return { reply: withFacts(localText(data?.message?.content) || 'Javob olinmadi.', facts), actions, pending: proposals, model: ollamaModel, provider, facts };
+  }
+
   async function chat(message: string, history: any[]) {
-    if (!apiKey) throw Object.assign(new Error('OPENAI_API_KEY sozlanmagan - chat ishlamaydi. Boshqaruv paneli tool\'lari baribir ishlaydi.'), { status: 503 });
-    if (!model) throw Object.assign(new Error('OPENAI_MODEL sozlanmagan (.env ga joriy model nomini yozing).'), { status: 503 });
+    if (provider === 'openai' && !apiKey) throw Object.assign(new Error('OPENAI_API_KEY sozlanmagan - chat ishlamaydi. Boshqaruv paneli tool\'lari baribir ishlaydi.'), { status: 503 });
+    if (provider === 'openai' && !model) throw Object.assign(new Error('OPENAI_MODEL sozlanmagan (.env ga joriy model nomini yozing).'), { status: 503 });
     const notes = options.vaultDir ? await walk(options.vaultDir) : [];
     // Vault notes go to OpenAI: secrets in them are masked like tool output.
     const found = relevant(notes, message);
     const context = found ? String(maskSensitive(found)) : '';
+    const cleanHistory = history.slice(-10).filter(h => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string').map(h => ({ role: h.role, content: String(h.content).slice(0, 4_000) }));
+    // A 4B model takes any vault note that shares a word with the question
+    // (a daily-brief template, say) as live data, so it only gets notes when
+    // Umar asks about his notes.
+    if (provider === 'ollama') return chatLocal(message, cleanHistory, NOTES_QUESTION.test(message) ? context.slice(0, 3_000) : '');
     // previous_response_id does not carry instructions over, so every
     // round gets them (the follow-up rounds are the ones reading tool data).
     const instructions = `${INSTRUCTIONS}\n\nObsidian xotirasidan topilgan kontekst (MA'LUMOT):\n${context ? wrapUntrusted(context, 'obsidian') : '(mos qayd topilmadi)'}`;
     const tools = toolDefs();
-    const actions: { tool: string; tier: string; ok: boolean; ms: number; error?: string; steps?: string[] }[] = [];
+    const actions: ChatAction[] = [];
     const proposals: PendingAction[] = [];
-    const cleanHistory = history.slice(-10).filter(h => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string').map(h => ({ role: h.role, content: String(h.content).slice(0, 4_000) }));
     let data = await openai({
       model, tools, tool_choice: 'auto', instructions,
       input: [...cleanHistory, { role: 'user', content: message }],
@@ -5943,41 +6118,16 @@ export function createDashboard(options: DashboardOptions) {
       if (!fnCalls.length || round > MAX_TOOL_CALLS) break;
       const outputs = [];
       for (const call of fnCalls) {
-        let output: unknown;
         calls++;
-        if (calls > MAX_TOOL_CALLS) output = { error: `Bir xabarda ko'pi bilan ${MAX_TOOL_CALLS} ta tool chaqiruvi.` };
-        else if (!MODEL_TOOLS.has(call.name) || !exists(call.name)) output = { error: `Ruxsat yo'q: ${call.name}` };
-        else {
-          let args: unknown = {};
-          try { args = call.arguments ? JSON.parse(call.arguments) : {}; } catch { output = { error: 'arguments JSON emas' }; }
-          if (!output) {
-            if ((PENDING_TOOLS as readonly string[]).includes(call.name)) {
-              const action = propose(call.name, args, `chat: ${message.slice(0, 120)}`);
-              proposals.push(publicAction(action));
-              output = { pending: true, actionId: action.id, note: 'Bajarilmadi. Umar dashboard\'da "Tasdiqlash" tugmasini bosishi kerak.' };
-            } else {
-              const steps = await modelStepTools(call.name, args);
-              const outside = steps.filter(step => !MODEL_STEP_TOOLS.has(step));
-              if (outside.length) {
-                output = { error: `Ruxsat yo'q: vazifa qadamida chat ishlata olmaydigan tool bor (${outside.join(', ')}). Bunday vazifani Umar o'zi boshqaruv panelidan yoki Claude orqali bajaradi.` };
-                actions.push({ tool: call.name, tier: tierOf(call.name), ok: false, ms: 0, error: `step tools outside allow-list: ${outside.join(', ')}`.slice(0, 200), steps });
-              } else {
-                const started = Date.now();
-                let result: ToolResult;
-                try { result = await registry.executeTool(call.name, args); }
-                catch (e) { result = { success: false, error: e instanceof Error ? e.message : String(e), metadata: { duration: 0, timestamp: '', version: '', toolName: call.name } }; }
-                actions.push({ tool: call.name, tier: tierOf(call.name), ok: result.success, ms: Date.now() - started, error: result.success ? undefined : String(result.error).slice(0, 200), steps: steps.length ? steps : undefined });
-                output = { success: result.success, data: result.data, error: result.error };
-              }
-            }
-          }
-        }
+        const output = calls > MAX_TOOL_CALLS
+          ? { error: `Bir xabarda ko'pi bilan ${MAX_TOOL_CALLS} ta tool chaqiruvi.` }
+          : await runModelCall(call.name, call.arguments, MODEL_TOOLS, MODEL_STEP_TOOLS, message, actions, proposals);
         outputs.push({ type: 'function_call_output', call_id: call.call_id, output: wrapUntrusted(trim(output), `tool-${call.name}`) });
       }
       // after the limit the model must answer in words: no more tools
       data = await openai({ model, tools, instructions, tool_choice: calls >= MAX_TOOL_CALLS ? 'none' : 'auto', previous_response_id: data.id, input: outputs });
     }
-    return { reply: outputText(data) || 'Javob olinmadi.', actions, pending: proposals, model };
+    return { reply: outputText(data) || 'Javob olinmadi.', actions, pending: proposals, model, provider };
   }
 
   // ---------------------------------------------------------------- overview
@@ -6023,7 +6173,7 @@ export function createDashboard(options: DashboardOptions) {
 
         if (url.pathname === '/api/status' && req.method === 'GET') {
           const health: any = exists('jarvis_health') ? (await registry.executeTool('jarvis_health', {})).data : null;
-          return json(res, 200, { online: true, vault: options.vaultDir ?? null, model: model || null, apiReady: Boolean(apiKey && model), paused: health?.paused ?? null, tools: registry.listTools().length, modules: registry.listModules().length, warnings: health?.warnings ?? [] });
+          return json(res, 200, { online: true, vault: options.vaultDir ?? null, model: chatModel || null, provider, apiReady: provider === 'ollama' || Boolean(apiKey && model), paused: health?.paused ?? null, tools: registry.listTools().length, modules: registry.listModules().length, warnings: health?.warnings ?? [] });
         }
         if (url.pathname === '/api/graph' && req.method === 'GET') return json(res, 200, graph(options.vaultDir ? await walk(options.vaultDir) : []));
         if (url.pathname === '/api/overview' && req.method === 'GET') return json(res, 200, await overview());
@@ -6223,7 +6373,7 @@ Mavjud Jarvis fayli: faqat shu ishdagi o'zgarishlar (+2 / -2).
 
 ```diff
 diff --git a/dashboard/public/app.js b/dashboard/public/app.js
-index 4c98328..2d2ab84 100644
+index 4c98328..39bdce2 100644
 --- a/dashboard/public/app.js
 +++ b/dashboard/public/app.js
 @@ -7,7 +7,7 @@ function tick(){const ns=state.nodes.filter(visible);for(let i=0;i<ns.length;i++
@@ -6231,7 +6381,7 @@ index 4c98328..2d2ab84 100644
  function pointer(e){const r=canvas.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top}}canvas.addEventListener('pointerdown',e=>{const p=pointer(e);state.drag=[...state.nodes].reverse().find(n=>visible(n)&&Math.hypot(n.x-p.x,n.y-p.y)<n.size+8)||null;if(state.drag)canvas.setPointerCapture(e.pointerId)});canvas.addEventListener('pointermove',e=>{const p=pointer(e);state.hover=[...state.nodes].reverse().find(n=>visible(n)&&Math.hypot(n.x-p.x,n.y-p.y)<n.size+8)||null;if(state.drag){state.drag.x=p.x;state.drag.y=p.y;state.drag.vx=state.drag.vy=0}if(state.hover)document.querySelector('#inspect').innerHTML=`<b>${state.hover.label}</b><br><span class="muted">${state.hover.path}</span>`});canvas.addEventListener('pointerup',()=>state.drag=null);
  function hubs(){const degree=Object.fromEntries(state.nodes.map(n=>[n.id,0]));state.links.forEach(l=>{degree[l.source]++;degree[l.target]++});document.querySelector('#hubs').innerHTML=[...state.nodes].sort((a,b)=>degree[b.id]-degree[a.id]).slice(0,7).map(n=>`<div class="hub"><i></i><span>${n.label.slice(0,22)}</span><b>${degree[n.id]}</b></div>`).join('')}
 -async function load(){try{const [s,g]=await Promise.all([fetch('/api/status').then(r=>r.json()),fetch('/api/graph').then(r=>r.json())]);state.nodes=g.nodes.map((n,i)=>({...n,x:innerWidth*.46+(Math.random()-.5)*420,y:innerHeight*.46+(Math.random()-.5)*360,vx:0,vy:0}));state.links=g.links;document.querySelector('#mdCount').textContent=state.nodes.filter(n=>n.kind==='md').length;document.querySelector('#canvasCount').textContent=state.nodes.filter(n=>n.kind==='canvas').length;document.querySelector('#groupCount').textContent=new Set(state.nodes.map(n=>n.group)).size;document.querySelector('.status').classList.add('ready');document.querySelector('#statusText').textContent=s.apiReady?`${s.model} · TAYYOR`:'GRAF TAYYOR · API KEY KUTILMOQDA';hubs()}catch(e){document.querySelector('#statusText').textContent='ULANISH XATOSI'}}load();
-+async function load(){try{const [s,g]=await Promise.all([fetch('/api/status').then(r=>r.json()),fetch('/api/graph').then(r=>r.json())]);state.nodes=g.nodes.map((n,i)=>({...n,x:innerWidth*.46+(Math.random()-.5)*420,y:innerHeight*.46+(Math.random()-.5)*360,vx:0,vy:0}));state.links=g.links;document.querySelector('#mdCount').textContent=state.nodes.filter(n=>n.kind==='md').length;document.querySelector('#canvasCount').textContent=state.nodes.filter(n=>n.kind==='canvas').length;document.querySelector('#groupCount').textContent=new Set(state.nodes.map(n=>n.group)).size;document.querySelector('.status').classList.add('ready');document.querySelector('#statusText').textContent=s.apiReady?`${s.model} · ${s.tools} TOOL${s.paused?' · KILL':''}`:`GRAF + ${s.tools} TOOL · CHAT: OPENAI_MODEL/KEY KUTILMOQDA`;hubs()}catch(e){document.querySelector('#statusText').textContent='ULANISH XATOSI'}}load();
++async function load(){try{const [s,g]=await Promise.all([fetch('/api/status').then(r=>r.json()),fetch('/api/graph').then(r=>r.json())]);state.nodes=g.nodes.map((n,i)=>({...n,x:innerWidth*.46+(Math.random()-.5)*420,y:innerHeight*.46+(Math.random()-.5)*360,vx:0,vy:0}));state.links=g.links;document.querySelector('#mdCount').textContent=state.nodes.filter(n=>n.kind==='md').length;document.querySelector('#canvasCount').textContent=state.nodes.filter(n=>n.kind==='canvas').length;document.querySelector('#groupCount').textContent=new Set(state.nodes.map(n=>n.group)).size;document.querySelector('.status').classList.add('ready');document.querySelector('#statusText').textContent=s.apiReady?`${s.model}${s.provider==='ollama'?' (LOKAL)':''} · ${s.tools} TOOL${s.paused?' · KILL':''}`:`GRAF + ${s.tools} TOOL · CHAT: OPENAI_MODEL/KEY KUTILMOQDA`;hubs()}catch(e){document.querySelector('#statusText').textContent='ULANISH XATOSI'}}load();
  document.querySelectorAll('.top button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.top button').forEach(x=>x.classList.remove('active'));b.classList.add('active');state.filter=b.dataset.filter});document.querySelector('#repel').oninput=e=>state.repel=+e.target.value;document.querySelector('#length').oninput=e=>state.length=+e.target.value;document.querySelector('#search').oninput=e=>{const q=e.target.value.toLowerCase();state.nodes.forEach(n=>n.size=n.label.toLowerCase().includes(q)&&q?19:Math.max(7,n.size>15?11:n.size))};
 -const answer=document.querySelector('#answer'),form=document.querySelector('#composer'),input=document.querySelector('#message');form.onsubmit=async e=>{e.preventDefault();const message=input.value.trim();if(!message)return;input.value='';answer.classList.remove('hidden');answer.innerHTML=`<div class="you">SIZ · ${message}</div><div class="jarvis">JARVIS fikrlayapti…</div>`;document.querySelector('#send').disabled=true;try{const r=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,history:state.history})});const data=await r.json();if(!r.ok)throw new Error(data.error);answer.innerHTML=`<div class="you">SIZ · ${message}</div><div class="jarvis">${escapeHtml(data.reply)}</div>`;state.history.push({role:'user',content:message},{role:'assistant',content:data.reply})}catch(err){answer.innerHTML=`<div class="you">SIZ · ${message}</div><div class="jarvis">${escapeHtml(err.message)}. OpenAI API kalitini sozlang.</div>`}finally{document.querySelector('#send').disabled=false}};
 +const answer=document.querySelector('#answer'),form=document.querySelector('#composer'),input=document.querySelector('#message');form.onsubmit=async e=>{e.preventDefault();const message=input.value.trim();if(!message)return;input.value='';answer.classList.remove('hidden');answer.innerHTML=`<div class="you">SIZ · ${escapeHtml(message)}</div><div class="jarvis">JARVIS fikrlayapti…</div>`;document.querySelector('#send').disabled=true;try{const r=await fetch('/api/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,history:state.history})});const data=await r.json();if(!r.ok)throw new Error(data.error);answer.innerHTML=`<div class="you">SIZ · ${escapeHtml(message)}</div><div class="jarvis">${escapeHtml(data.reply)}</div>${window.renderChatExtras?window.renderChatExtras(data):""}`;state.history.push({role:'user',content:message},{role:'assistant',content:data.reply})}catch(err){answer.innerHTML=`<div class="you">SIZ · ${escapeHtml(message)}</div><div class="jarvis">${escapeHtml(err.message)}</div>`}finally{document.querySelector('#send').disabled=false}};
@@ -6453,14 +6603,14 @@ Yangi fayl, 16 qator.
 
 ### .env.example
 
-Mavjud Jarvis fayli: faqat shu ishdagi o'zgarishlar (+4 / -0).
+Mavjud Jarvis fayli: faqat shu ishdagi o'zgarishlar (+8 / -0).
 
 ```diff
 diff --git a/.env.example b/.env.example
-index 16e09f6..84aa3a2 100644
+index 16e09f6..929cf4c 100644
 --- a/.env.example
 +++ b/.env.example
-@@ -5,3 +5,7 @@ GEMINI_CLI_TRUST_WORKSPACE=
+@@ -5,3 +5,11 @@ GEMINI_CLI_TRUST_WORKSPACE=
  JARVIS_HOME=
  JARVIS_WORKSPACE=
  GITHUB_TOKEN=
@@ -6468,6 +6618,10 @@ index 16e09f6..84aa3a2 100644
 +TELEGRAM_OWNER_CHAT_ID=
 +JARVIS_DAILY_BUDGET_USD=
 +JARVIS_MONTHLY_BUDGET_USD=
++OPENAI_API_KEY=
++OPENAI_MODEL=
++JARVIS_CHAT_PROVIDER=
++OLLAMA_CHAT_MODEL=
 ```
 
 ### main.ts
@@ -6551,6 +6705,85 @@ index a911e25..b49355c 100644
 ```
 
 ## Skriptlar (scripts/)
+
+### scripts/chat-live-test.mjs
+
+Yangi fayl, 26 qator.
+
+```js
+// Live check of the dashboard chat (http://127.0.0.1:7331/api/chat) with the
+// persisted dashboard token. The token is read from disk and never printed.
+//   node scripts/chat-live-test.mjs "xabar 1" "xabar 2" ...   or   @prompts.json (JSON array)
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
+const home = process.env.JARVIS_HOME ?? 'C:\\Users\\tukht\\Jarvis\\data';
+const token = readFileSync(join(home, 'dashboard', 'token'), 'utf-8').trim();
+const base = `http://127.0.0.1:${process.env.JARVIS_DASHBOARD_PORT || 7331}`;
+const headers = { 'x-jarvis-token': token, 'content-type': 'application/json' };
+
+const status = await fetch(`${base}/api/status`, { headers }).then(r => r.json());
+console.log(JSON.stringify({ status: { provider: status.provider, model: status.model, apiReady: status.apiReady, paused: status.paused, tools: status.tools } }));
+const args = process.argv.slice(2);
+const prompts = args.length === 1 && args[0].startsWith('@') ? JSON.parse(readFileSync(args[0].slice(1), 'utf-8').replace(/^\uFEFF/, '')) : args;
+for (const message of prompts) {
+  const started = Date.now();
+  const response = await fetch(`${base}/api/chat`, { method: 'POST', headers, body: JSON.stringify({ message, history: [] }) });
+  const data = await response.json().catch(() => ({}));
+  console.log(JSON.stringify({
+    message, http: response.status, seconds: Math.round((Date.now() - started) / 100) / 10, provider: data.provider,
+    actions: (data.actions ?? []).map(a => `${a.ok ? 'ok' : 'FAIL'} ${a.tool} ${a.ms}ms${a.error ? ' ' + a.error : ''}`),
+    pending: (data.pending ?? []).map(p => `${p.tool} ${p.id}`), reply: data.reply ?? data.error,
+  }));
+}
+```
+
+### scripts/chat-local-bench.mjs
+
+Yangi fayl, 41 qator.
+
+```js
+// Compare local chat models without touching .env or the running dashboard:
+// loads Jarvis + the dashboard handler in this process with the given Ollama
+// model and asks the same questions the live dashboard would get.
+//   node scripts/chat-local-bench.mjs <ollama-model> "savol 1" "savol 2" ...
+//   node scripts/chat-local-bench.mjs <ollama-model> @prompts.json
+import { createServer } from 'node:http';
+import { existsSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+const root = resolve(import.meta.dirname, '..');
+if (existsSync(join(root, '.env'))) process.loadEnvFile(join(root, '.env'));
+process.env.JARVIS_CLIENT = 'chat-bench';
+const [model, ...args] = process.argv.slice(2);
+// "@prompts.json" (a JSON array of strings) avoids shell quoting of Uzbek apostrophes
+const prompts = args.length === 1 && args[0].startsWith('@') ? JSON.parse(readFileSync(args[0].slice(1), 'utf-8').replace(/^\uFEFF/, '')) : args;
+if (!model || !prompts.length) { console.error('Usage: node scripts/chat-local-bench.mjs <ollama-model> "savol" ...'); process.exit(2); }
+
+const { createJarvis } = await import(pathToFileURL(join(root, 'dist', 'main.js')).href);
+const { createDashboard } = await import(pathToFileURL(join(root, 'dist', 'dashboard', 'app.js')).href);
+const jarvis = createJarvis({});
+const components = jarvis.getComponents();
+const token = 'bench-token';
+const port = 7390;
+const dashboard = createDashboard({ registry: components.moduleRegistry, jarvisHome: components.config.jarvisHome, publicDir: join(root, 'dashboard', 'public'), vaultDir: process.env.JARVIS_WORKSPACE ?? null, port, token, chatProvider: 'ollama', ollamaModel: model });
+const server = createServer((req, res) => { void dashboard.handle(req, res); });
+await new Promise(r => server.listen(port, '127.0.0.1', r));
+const headers = { 'x-jarvis-token': token, 'content-type': 'application/json' };
+for (const message of prompts) {
+  const started = Date.now();
+  const response = await fetch(`http://127.0.0.1:${port}/api/chat`, { method: 'POST', headers, body: JSON.stringify({ message, history: [] }) });
+  const data = await response.json().catch(() => ({}));
+  console.log(JSON.stringify({
+    model, message, http: response.status, seconds: Math.round((Date.now() - started) / 100) / 10,
+    actions: (data.actions ?? []).map(a => `${a.ok ? 'ok' : 'FAIL'} ${a.tool}${a.error ? ' ' + a.error : ''}`),
+    pending: (data.pending ?? []).map(p => p.tool), reply: data.reply ?? data.error,
+  }));
+}
+server.close();
+process.exit(0);
+```
 
 ### scripts/export-code-bundle.mjs
 
@@ -7524,6 +7757,106 @@ try {
 }
 ```
 
+### scripts/setup-telegram.ps1
+
+Yangi fayl, 94 qator.
+
+```powershell
+# JARVIS Telegram (NotifyBot) setup - Umar runs this himself in PowerShell:
+#   powershell -ExecutionPolicy Bypass -File C:\Users\tukht\Jarvis\jarvis-project\scripts\setup-telegram.ps1
+# 1) paste the @BotFather token (hidden), 2) send /start to the bot,
+# 3) confirm it is you -> TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_CHAT_ID go to
+# .env and the bot sends you one test message. The token is never printed.
+# Only the owner's private chat is accepted; groups and other people are ignored.
+param([int]$WaitSeconds = 180)
+
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $PSScriptRoot
+$envPath = Join-Path $root '.env'
+
+function Hide-Token([string]$text, [string]$token) {
+  if ($token) { return $text.Replace($token, '***') }
+  return $text
+}
+
+function Invoke-Tg([string]$token, [string]$method, $body = $null, [int]$timeoutSec = 15) {
+  $uri = "https://api.telegram.org/bot$token/$method"
+  try {
+    if ($null -eq $body) { return Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec $timeoutSec }
+    $bytes = [Text.Encoding]::UTF8.GetBytes(($body | ConvertTo-Json -Depth 6 -Compress))
+    return Invoke-RestMethod -Uri $uri -Method Post -ContentType 'application/json; charset=utf-8' -Body $bytes -TimeoutSec $timeoutSec
+  } catch {
+    $detail = $_.Exception.Message
+    if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $detail = $_.ErrorDetails.Message }
+    throw (Hide-Token "Telegram $method xato: $detail" $token)
+  }
+}
+
+# Newest private-chat message (any text, usually /start) sent to the bot.
+function Find-PrivateChat($updates) {
+  $found = $null
+  foreach ($u in @($updates.result)) {
+    $m = $u.message
+    if ($m -and $m.chat -and $m.chat.type -eq 'private' -and $m.from -and -not $m.from.is_bot) { $found = $m }
+  }
+  return $found
+}
+
+if ($MyInvocation.InvocationName -eq '.') { return }
+
+Write-Host 'JARVIS Telegram setup' -ForegroundColor Cyan
+Write-Host '@BotFather bergan tokenni joylang (ko''rinmaydi).'
+$secure = Read-Host 'TELEGRAM_BOT_TOKEN' -AsSecureString
+$ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+$token = $null
+try {
+  $token = ([Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)).Trim()
+  if ($token -notmatch '^\d{5,15}:[A-Za-z0-9_-]{30,}$') { throw 'Token shakli noto''g''ri (kutilgan: 123456789:ABC...).' }
+
+  $me = (Invoke-Tg $token 'getMe').result
+  Write-Host ("Bot topildi: @{0} ({1})" -f $me.username, $me.first_name) -ForegroundColor Green
+
+  $webhook = (Invoke-Tg $token 'getWebhookInfo').result
+  if ($webhook.url) { throw 'Bu botda webhook o''rnatilgan - Jarvis getUpdates ishlatadi. Yangi bot oching yoki webhookni o''zingiz o''chiring.' }
+
+  Write-Host ("Endi Telegram'da @{0} ni oching va /start yuboring. {1} soniya kutaman..." -f $me.username, $WaitSeconds)
+  $deadline = (Get-Date).AddSeconds($WaitSeconds)
+  $chat = $null
+  while (-not $chat -and (Get-Date) -lt $deadline) {
+    $updates = Invoke-Tg $token 'getUpdates?timeout=20&allowed_updates=%5B%22message%22%5D' $null 30
+    $chat = Find-PrivateChat $updates
+    if (-not $chat) { Write-Host '.' -NoNewline }
+  }
+  Write-Host ''
+  if (-not $chat) { throw "/start kelmadi ($WaitSeconds s). Skriptni qayta ishga tushiring." }
+
+  $who = ("{0} {1}" -f $chat.from.first_name, $chat.from.last_name).Trim()
+  if ($chat.from.username) { $who += " (@$($chat.from.username))" }
+  $answer = Read-Host ("Xabar yuborgan: $who. Bu sizmisiz? (h/y)")
+  if ($answer -notmatch '^(h|ha|y|yes)$') { throw 'Tasdiqlanmadi - hech narsa yozilmadi.' }
+  $chatId = [string]$chat.chat.id
+
+  $lines = if (Test-Path $envPath) { @(Get-Content -LiteralPath $envPath) } else { @() }
+  $lines = @($lines | Where-Object { $_ -notmatch '^\s*(TELEGRAM_BOT_TOKEN|TELEGRAM_OWNER_CHAT_ID)\s*=' })
+  $lines += "TELEGRAM_BOT_TOKEN=$token"
+  $lines += "TELEGRAM_OWNER_CHAT_ID=$chatId"
+  [IO.File]::WriteAllLines($envPath, $lines, (New-Object Text.UTF8Encoding($false)))
+
+  $text = "JARVIS: Telegram ulandi. Bu test xabari - tasdiq tugmalari va eslatmalar shu chatga keladi."
+  $sent = (Invoke-Tg $token 'sendMessage' @{ chat_id = $chatId; text = $text }).result
+  Write-Host ("SUCCESS: .env ga yozildi, test xabari yuborildi (message_id {0})." -f $sent.message_id) -ForegroundColor Green
+  Write-Host 'Claude''ga "tayyor" deb yozing: u Jarvis jarayonlarini qayta ishga tushirib, Jarvis ichidan tekshiradi.'
+}
+catch {
+  Write-Host (Hide-Token ("XATO: " + $_.Exception.Message) $token) -ForegroundColor Red
+  exit 1
+}
+finally {
+  if ($ptr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
+  $token = $null
+}
+```
+
 ### scripts/uninstall-jarvis-daemon.ps1
 
 Yangi fayl, 9 qator.
@@ -8128,7 +8461,7 @@ describe('personal-assistant: file -> task -> reminder', () => {
 
 ### test/dashboard.test.ts
 
-Yangi fayl, 293 qator.
+Yangi fayl, 400 qator.
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -8145,12 +8478,12 @@ import { createTasksModule } from '../tools/tasks/index.js';
 import { createAssistantModule } from '../tools/assistant/index.js';
 import { createFarmModule } from '../tools/farm/index.js';
 import { createSmmModule } from '../tools/smm/index.js';
-import { createDashboard, loadOrCreateToken } from '../dashboard/app.js';
-import { readFileSync } from 'fs';
+import { createDashboard, loadOrCreateToken, toolFacts } from '../dashboard/app.js';
+import { existsSync, readFileSync } from 'fs';
 
 const meta = (): ToolResult['metadata'] => ({ duration: 0, timestamp: '', version: '', toolName: '' });
 
-async function setup(opts: { apiKey?: string; model?: string; openai?: (body: any, n: number) => any; meter?: boolean } = {}) {
+async function setup(opts: { apiKey?: string; model?: string; openai?: (body: any, n: number) => any; meter?: boolean; chatProvider?: string; ollama?: (body: any, n: number) => any; vaultDir?: string } = {}) {
   const home = await mkdtemp(join(tmpdir(), 'jarvis-dash-'));
   const pub = await mkdtemp(join(tmpdir(), 'jarvis-dash-pub-'));
   await writeFile(join(pub, 'index.html'), '<!doctype html><html><head><title>x</title></head><body></body></html>');
@@ -8169,14 +8502,23 @@ async function setup(opts: { apiKey?: string; model?: string; openai?: (body: an
   registry.register(createSmmModule(registry, home, { vaultDir: null }));
   registry.register(createFarmModule(registry, home));
   const openaiCalls: any[] = [];
+  const ollamaCalls: any[] = [];
   const fetchImpl = (async (url: any, init: any) => {
     const body = JSON.parse(init.body);
+    if (String(url) === 'http://ollama.test/api/chat') {
+      ollamaCalls.push(body);
+      const out = opts.ollama ? opts.ollama(body, ollamaCalls.length) : { message: { role: 'assistant', content: 'ok' } };
+      if (out instanceof Error) throw out;
+      const { __status, ...rest } = out;
+      return new Response(JSON.stringify(rest), { status: __status ?? 200, headers: { 'content-type': 'application/json' } });
+    }
     openaiCalls.push(body);
     const out = opts.openai ? opts.openai(body, openaiCalls.length) : { id: 'r', output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }] };
     return new Response(JSON.stringify(out), { status: 200, headers: { 'content-type': 'application/json' } });
   }) as unknown as typeof fetch;
   const port = 7399;
-  const dash = createDashboard({ registry, publicDir: pub, vaultDir: null, port, token: 'tok-123', apiKey: opts.apiKey ?? '', model: opts.model ?? '', fetchImpl, jarvisHome: opts.meter ? home : undefined });
+  const dash = createDashboard({ registry, publicDir: pub, vaultDir: opts.vaultDir ?? null, port, token: 'tok-123', apiKey: opts.apiKey ?? '', model: opts.model ?? '', fetchImpl, jarvisHome: opts.meter ? home : undefined,
+    chatProvider: opts.chatProvider ?? 'auto', ollamaBaseUrl: 'http://ollama.test', ollamaModel: 'local-test' });
   const server: Server = createServer((req, res) => { void dash.handle(req, res); });
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
   const realPort = (server.address() as AddressInfo).port;
@@ -8188,7 +8530,7 @@ async function setup(opts: { apiKey?: string; model?: string; openai?: (body: an
     if (body !== undefined) req.write(JSON.stringify(body));
     req.end();
   });
-  return { home, registry, call, sent, openaiCalls, dash, close: () => new Promise(r => server.close(r)) };
+  return { home, registry, call, sent, openaiCalls, ollamaCalls, dash, close: () => new Promise(r => server.close(r)) };
 }
 
 describe('dashboard: control Jarvis through the registry', () => {
@@ -8211,7 +8553,7 @@ describe('dashboard: control Jarvis through the registry', () => {
     expect(hz.status).toBe(200);
     expect(Object.keys(hz.json).sort()).toEqual(['ok', 'service', 'uptimeSeconds']);
     const st = (await call('GET', '/api/status')).json;
-    expect(st).toMatchObject({ online: true, apiReady: false, paused: false, warnings: ['test warning'] });
+    expect(st).toMatchObject({ online: true, apiReady: true, provider: 'ollama', paused: false, warnings: ['test warning'] });
     await close();
   });
 
@@ -8260,8 +8602,8 @@ describe('dashboard: control Jarvis through the registry', () => {
     await close();
   });
 
-  it('chat without a key or model answers 503 and never calls OpenAI', async () => {
-    const { call, openaiCalls, close } = await setup();
+  it('chat set to OpenAI without a key or model answers 503 and never calls OpenAI', async () => {
+    const { call, openaiCalls, close } = await setup({ chatProvider: 'openai' });
     const r = await call('POST', '/api/chat', { message: 'salom' });
     expect(r.status).toBe(503);
     expect(r.json.error).toContain('OPENAI_API_KEY');
@@ -8347,6 +8689,104 @@ describe('dashboard: control Jarvis through the registry', () => {
     expect((await registry.executeTool('task_get', { id: preId })).data.steps[0].status).toBe('pending');
     for (const body of openaiCalls) expect(body.instructions).toContain('MA\'LUMOT');
     await close();
+  });
+
+  it('without an OpenAI key the chat runs on the local Ollama model: smaller tool list, same gates, works under KILL, nothing booked', async () => {
+    const { home, call, ollamaCalls, openaiCalls, sent, close } = await setup({
+      meter: true,
+      ollama: (body, n) => n === 1
+        ? { message: { role: 'assistant', content: '', tool_calls: [
+            { function: { name: 'tasks_overview', arguments: {} } },
+            { function: { name: 'telegram_send', arguments: { text: 'hisobot' } } },
+            { function: { name: 'smm_content_plan', arguments: {} } },
+            { function: { name: 'task_create', arguments: { title: 'Yashirin', steps: [{ tool: 'farm_cost_add' }] } } },
+            { function: { name: 'reminder_set', arguments: '{"text":"veterinar","at":"2026-10-20T09:00:00+05:00"}' } },
+            { function: { name: 'jarvis_health', arguments: {} } },
+          ] } }
+        : { message: { role: 'assistant', content: "<think>qisqa</think>Ochiq vazifa yo'q. Telegram xabari tasdiqingizni kutyapti." } },
+    });
+    await writeFile(join(home, KILL_FILE), 'paused');
+    const status = await call('GET', '/api/status');
+    expect(status.json).toMatchObject({ provider: 'ollama', model: 'local-test', apiReady: true });
+    const r = await call('POST', '/api/chat', { message: 'vazifalar holati', history: [{ role: 'user', content: 'oldingi' }] });
+    expect(r.status).toBe(200);
+    expect(r.json.provider).toBe('ollama');
+    // the facts code wrote from the tool result first, then the model's words
+    expect(r.json.reply).toMatch(/^Aniq \(tool natijasi\):\n- KILL YOQILGAN.*\n\nLokal model izohi \(adashishi mumkin\):\nOchiq vazifa yo'q\. Telegram xabari tasdiqingizni kutyapti\.$/);
+    expect(r.json.facts).toEqual([expect.stringContaining('KILL YOQILGAN')]);
+    expect(r.json.pending).toEqual([expect.objectContaining({ tool: 'telegram_send', status: 'pending' })]);
+    expect(r.json.actions.map((a: any) => [a.tool, a.ok])).toEqual([['tasks_overview', true], ['task_create', false], ['reminder_set', true], ['jarvis_health', true]]);
+    expect(sent).toEqual([]);
+    expect(openaiCalls).toEqual([]);
+    const first = ollamaCalls[0];
+    expect(first).toMatchObject({ model: 'local-test', stream: false, think: true });
+    const offered = first.tools.map((t: any) => t.function.name);
+    expect(offered).toContain('assistant_intake');
+    expect(offered).toContain('telegram_send');
+    for (const name of ['smm_content_plan', 'task_run_next', 'write_file', 'task_confirm_step', 'farm_health_record']) expect(offered).not.toContain(name);
+    expect(first.tools.every((t: any) => t.function.description.length <= 300)).toBe(true);
+    expect(first.messages[0].role).toBe('system');
+    expect(first.messages[0].content).toContain("MA'LUMOT");
+    expect(first.messages.slice(1)).toEqual([{ role: 'user', content: 'oldingi' }, { role: 'user', content: 'vazifalar holati' }]);
+    const second = ollamaCalls[1];
+    const toolMessages = second.messages.filter((m: any) => m.role === 'tool');
+    expect(toolMessages.map((m: any) => m.tool_name)).toEqual(['tasks_overview', 'telegram_send', 'smm_content_plan', 'task_create', 'reminder_set', 'jarvis_health']);
+    expect(toolMessages[0].content).toContain('<<<UNTRUSTED source=tool-tasks_overview>>>');
+    expect(toolMessages[0].content).not.toContain('null');
+    expect(toolMessages[2].content).toContain("Ruxsat yo'q: smm_content_plan");
+    expect(toolMessages[3].content).toContain('farm_cost_add');
+    expect(second.messages.find((m: any) => m.role === 'assistant').tool_calls.length).toBe(6);
+    expect(existsSync(join(home, 'ledger', 'costs.jsonl'))).toBe(false);
+    await close();
+  });
+
+  it('local chat: a model without a thinking mode is asked again without it; a failed follow-up still reports what ran; Ollama down answers 503', async () => {
+    const thinkless = await setup({
+      ollama: body => body.think ? { __status: 400, error: '"local-test" does not support thinking' } : { message: { role: 'assistant', content: 'salom' } },
+    });
+    const r = await thinkless.call('POST', '/api/chat', { message: 'salom' });
+    expect(r.json.reply).toBe('salom');
+    expect(thinkless.ollamaCalls.map((b: any) => b.think)).toEqual([true, false]);
+    await thinkless.call('POST', '/api/chat', { message: 'yana' });
+    expect(thinkless.ollamaCalls.at(-1).think).toBe(false);
+    await thinkless.close();
+    // tools already ran when the follow-up round fails: the answer still lists them
+    const midway = await setup({
+      ollama: (body, n) => n === 1
+        ? { message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'reminder_set', arguments: { text: 'veterinar', at: '2026-10-20T09:00:00+05:00' } } }] } }
+        : new TypeError('fetch failed'),
+    });
+    const m = await midway.call('POST', '/api/chat', { message: 'eslat' });
+    expect(m.status).toBe(200);
+    expect(m.json.incomplete).toBe(true);
+    expect(m.json.reply).toContain('yakunlanmadi');
+    expect(m.json.actions).toEqual([expect.objectContaining({ tool: 'reminder_set', ok: true })]);
+    await midway.close();
+    const down = await setup({ ollama: () => new TypeError('fetch failed') });
+    const d = await down.call('POST', '/api/chat', { message: 'salom' });
+    expect(d.status).toBe(503);
+    expect(d.json.error).toContain('Ollama');
+    await down.close();
+  });
+
+  it('local chat gets Obsidian notes only when Umar asks about his notes', async () => {
+    const vault = await mkdtemp(join(tmpdir(), 'jarvis-dash-vault-'));
+    await writeFile(join(vault, 'Kunlik brif.md'), '# Kunlik brif\nBugungi vazifalar: hisob-fakturalar, kontent reja (SHABLON)');
+    const { call, ollamaCalls, close } = await setup({ vaultDir: vault });
+    await call('POST', '/api/chat', { message: 'bugungi vazifalar qanday?' });
+    expect(ollamaCalls[0].messages[0].content).not.toContain('SHABLON');
+    await call('POST', '/api/chat', { message: 'obsidian qaydlarimda bugungi vazifalar haqida nima bor?' });
+    expect(ollamaCalls[1].messages[0].content).toContain('SHABLON');
+    await close();
+  });
+
+  it('toolFacts states hands, today and spend from the tool result, not from the model', () => {
+    const hands = toolFacts('hands_status', { hands: [{ hand: 'GitHub', verdict: 'live' }, { hand: 'OpenAI', verdict: 'configured' }, { hand: 'Telegram', verdict: 'not_configured' }] });
+    expect(hands).toBe("Ishlayapti (real sinov bilan): GitHub. Sozlangan, lekin sinovsiz: OpenAI. Sozlanmagan: Telegram. Tekshirilmagan: yo'q.");
+    expect(toolFacts('assistant_today', { date: '2026-10-19', remindersToday: [], tasksDueToday: [{}], openTasks: 1 })).toContain('1 ta bugungi vazifa, 0 ta muddati');
+    expect(toolFacts('spend_report', { period: 'month', totalUsd: 0, calls: 0 })).toBe('Sarf (month): 0 USD, 0 ta yozuv.');
+    expect(toolFacts('jarvis_health', { paused: false, modules: 28, tools: 188 })).toContain("KILL o'chiq");
+    expect(toolFacts('task_list', { tasks: [] })).toBeUndefined();
   });
 
   it('two quick confirms of one pending action run it once', async () => {
