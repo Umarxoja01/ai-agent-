@@ -32,14 +32,22 @@ export function adminChatId(env: Env): string {
  */
 export async function withAdminChatOverride(env: Env): Promise<Env> {
   const moved = await db.getMeta(env.DB, ADMIN_CHAT_OVERRIDE);
-  const follow = moved && moved.startsWith(`${adminChatId(env)}>`);
-  return { ...env, ...(follow ? { ADMIN_CHAT_ID: moved.split('>')[1]! } : {}) };
+  return { ...env, ...(moved && moved.startsWith(`${adminChatId(env)}>`) ? { ADMIN_CHAT_ID: moved.split('>')[1]! } : {}) };
 }
 
-/** Records that the operators' group moved to a new id (env must be the per-request copy). */
+/** The stored move, but only while it applies to the configured ADMIN_CHAT_ID. */
+export async function activeChatMove(env: Env): Promise<string | null> {
+  const moved = await db.getMeta(env.DB, ADMIN_CHAT_OVERRIDE);
+  return moved && moved.startsWith(`${(env.ADMIN_CHAT_ID ?? '').trim()}>`) ? moved : null;
+}
+
+/**
+ * Records that the operators' group moved to a new id (env must be the per-request copy).
+ * Only a basic group moves, and a move always lands on a supergroup, so the chat that moved
+ * is the configured ADMIN_CHAT_ID itself.
+ */
 export async function followChatMove(env: Env, newChatId: number): Promise<void> {
-  const original = (await db.getMeta(env.DB, ADMIN_CHAT_OVERRIDE))?.split('>')[0] ?? adminChatId(env);
-  await db.setMeta(env.DB, ADMIN_CHAT_OVERRIDE, `${original}>${newChatId}`);
+  await db.setMeta(env.DB, ADMIN_CHAT_OVERRIDE, `${adminChatId(env)}>${newChatId}`);
   console.error(`operators' chat moved to ${newChatId}: update ADMIN_CHAT_ID in wrangler.jsonc`);
   env.ADMIN_CHAT_ID = String(newChatId);
 }
@@ -258,6 +266,11 @@ async function refreshCard(env: Env, cb: TgCallbackQuery, order: db.Order, note?
 export async function relayToCustomer(env: Env, msg: TgMessage, customerChatId: number): Promise<void> {
   const session = await db.getSession(env.DB, customerChatId);
   const lang = session.lang ?? 'uz';
+  // The customer's next message answers the operator, not the "how many?" under a product card.
+  if (session.step?.startsWith('qty?:')) {
+    session.step = null;
+    await db.saveSession(env.DB, session);
+  }
   try {
     if (msg.text !== undefined) {
       await sendMessage(env, customerChatId, `${T[lang].operatorSays}\n${esc(msg.text)}`);

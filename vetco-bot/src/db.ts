@@ -340,16 +340,15 @@ export interface RelayRow {
   chatId: number;
   orderId: number | null;
   kind: RelayKind;
-  mediaGroup?: string | null;
 }
 
 export async function addRelay(db: D1Database, r: RelayRow): Promise<void> {
   await db
     .prepare(
-      `INSERT OR REPLACE INTO relay (admin_chat_id, admin_message_id, chat_id, order_id, kind, media_group, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO relay (admin_chat_id, admin_message_id, chat_id, order_id, kind, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
     )
-    .bind(r.adminChatId, r.adminMessageId, r.chatId, r.orderId, r.kind, r.mediaGroup ?? null, nowIso())
+    .bind(r.adminChatId, r.adminMessageId, r.chatId, r.orderId, r.kind, nowIso())
     .run();
 }
 
@@ -373,13 +372,25 @@ export async function countInbound(db: D1Database, chatId: number, sinceIso: str
   return row?.n ?? 0;
 }
 
-/** True when an album from this customer already got its header in the operators' chat. */
-export async function mediaGroupSeen(db: D1Database, chatId: number, mediaGroup: string): Promise<boolean> {
-  const row = await db
-    .prepare('SELECT 1 AS x FROM relay WHERE chat_id = ? AND media_group = ? LIMIT 1')
-    .bind(chatId, mediaGroup)
-    .first();
-  return !!row;
+export type AlbumOutcome = 'sent' | 'refused';
+
+/**
+ * Every photo of an album arrives as its own update. The first one claims the album with
+ * its outcome; later ones get that outcome back (null means "you are the first").
+ */
+export async function claimAlbum(
+  db: D1Database,
+  chatId: number,
+  mediaGroup: string,
+  outcome: AlbumOutcome,
+): Promise<AlbumOutcome | null> {
+  const key = `album:${chatId}:${mediaGroup}`;
+  const res = await db
+    .prepare('INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)')
+    .bind(key, `${outcome}|${nowIso()}`)
+    .run();
+  if ((res.meta.changes ?? 0) > 0) return null;
+  return (await getMeta(db, key))?.startsWith('refused|') ? 'refused' : 'sent';
 }
 
 /** Housekeeping for the cron: duplicate-update guard and old reply links. */
@@ -388,6 +399,9 @@ export async function pruneOld(db: D1Database): Promise<void> {
   await db.batch([
     db.prepare('DELETE FROM processed_updates WHERE created_at < ?').bind(new Date(Date.now() - 7 * day).toISOString()),
     db.prepare('DELETE FROM relay WHERE created_at < ?').bind(new Date(Date.now() - 180 * day).toISOString()),
+    db
+      .prepare(`DELETE FROM meta WHERE key LIKE 'album:%' AND substr(value, instr(value, '|') + 1) < ?`)
+      .bind(new Date(Date.now() - day).toISOString()),
   ]);
 }
 

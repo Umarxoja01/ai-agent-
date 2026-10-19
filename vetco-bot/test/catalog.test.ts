@@ -170,8 +170,8 @@ describe('orders API and setup', () => {
     const hook = net.of('setWebhook')[0]!;
     expect(hook.params).toMatchObject({ url: 'https://bot.test/telegram', secret_token: 'test-secret-0123456789' });
     const scopes = net.of('setMyCommands').map((c) => `${c.params.scope?.type ?? 'default'}:${c.params.language_code ?? ''}`);
-    expect(scopes).toEqual(['all_private_chats:', 'all_private_chats:ru', 'default:', 'chat:']);
-    expect(net.of('setMyCommands')[2]!.params.commands).toEqual([]);
+    expect(scopes).toEqual(['all_private_chats:', 'all_private_chats:ru', 'chat:']);
+    expect(net.of('deleteMyCommands')).toHaveLength(1);
     expect(net.of('getChat')[0]!.params.chat_id).toBe('-100777');
   });
 

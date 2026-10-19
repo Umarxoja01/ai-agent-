@@ -87,7 +87,6 @@ CREATE TABLE relay (
   chat_id          INTEGER NOT NULL,
   order_id         INTEGER,
   kind             TEXT NOT NULL,                -- in: customer message header, copy: copied media, card: order card
-  media_group      TEXT,
   created_at       TEXT NOT NULL,
   PRIMARY KEY (admin_chat_id, admin_message_id)
 );

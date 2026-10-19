@@ -12,6 +12,7 @@ import {
   mockNetwork,
   onboard,
   textUpdate,
+  okButton,
   type Net,
 } from './helpers';
 
@@ -161,10 +162,11 @@ describe('checkout', () => {
     const summary = net.lastTo(chat)!;
     expect(summary.params.text).toContain('+998901234567');
     expect(summary.params.text).toContain('Samarqand viloyati');
-    expect(buttons(summary)).toEqual(['ok', 'x']);
+    expect(buttons(summary)).toEqual([okButton(net, chat), 'x']);
+    expect(okButton(net, chat)).toMatch(/^ok:[0-9a-z]+$/);
 
-    await deliver(callbackUpdate(chat, 'ok'));
-    await deliver(callbackUpdate(chat, 'ok')); // double tap
+    await deliver(callbackUpdate(chat, okButton(net, chat)));
+    await deliver(callbackUpdate(chat, okButton(net, chat))); // double tap
     const orders = await ordersOf(chat);
     expect(orders).toHaveLength(1);
     expect(orders[0]!.status).toBe('new');
@@ -199,13 +201,13 @@ describe('checkout', () => {
     const chat = 2303;
     await onboard(chat);
     await checkoutToConfirm(chat);
-    await deliver(callbackUpdate(chat, 'ok'));
+    await deliver(callbackUpdate(chat, okButton(net, chat)));
     await deliver(callbackUpdate(chat, 'a:fluneks:3'));
     await deliver(callbackUpdate(chat, 'co'));
     expect(buttons(net.lastTo(chat))).toEqual(['sv:y', 'sv:n', 'x']);
     await deliver(callbackUpdate(chat, 'sv:y'));
     await deliver(textUpdate(chat, '40 bosh buqa uchun'));
-    await deliver(callbackUpdate(chat, 'ok'));
+    await deliver(callbackUpdate(chat, okButton(net, chat)));
     const orders = await ordersOf(chat);
     expect(orders).toHaveLength(2);
     expect(orders[1]!.note).toBe('40 bosh buqa uchun');
@@ -220,7 +222,7 @@ describe('checkout', () => {
     const s = await getSession(env.DB, chat);
     expect(s.step).toBeNull();
     expect(s.cart).toHaveLength(2);
-    await deliver(callbackUpdate(chat, 'ok'));
+    await deliver(callbackUpdate(chat, okButton(net, chat)));
     expect(await ordersOf(chat)).toHaveLength(0);
   });
 
@@ -245,7 +247,7 @@ describe('checkout', () => {
     await deliver(callbackUpdate(chat, 'rg:tsh'));
     await deliver(textUpdate(chat, '<a href="x">manzil</a>'));
     await deliver(callbackUpdate(chat, 'sk'));
-    await deliver(callbackUpdate(chat, 'ok'));
+    await deliver(callbackUpdate(chat, okButton(net, chat)));
     const card = net.of('sendMessage').find((c) => String(c.params.chat_id) === String(ADMIN_CHAT))!;
     expect(card.params.text).toContain('&lt;b&gt;Boss&lt;/b&gt; &amp; co');
     expect(card.params.text).toContain('&lt;a href=&quot;x&quot;&gt;');
@@ -258,7 +260,7 @@ describe('checkout', () => {
     const chat = 2307;
     await onboard(chat);
     await checkoutToConfirm(chat);
-    await deliver(callbackUpdate(chat, 'ok'));
+    await deliver(callbackUpdate(chat, okButton(net, chat)));
     const [order] = await ordersOf(chat);
     expect(order).toBeDefined();
     expect(order!.admin_message_id).toBeNull();
@@ -269,7 +271,7 @@ describe('operators', () => {
   async function placedOrder(chat: number): Promise<number> {
     await onboard(chat);
     await checkoutToConfirm(chat);
-    await deliver(callbackUpdate(chat, 'ok'));
+    await deliver(callbackUpdate(chat, okButton(net, chat)));
     return (await ordersOf(chat))[0]!.id;
   }
 

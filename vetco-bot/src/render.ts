@@ -143,12 +143,12 @@ export function cartView(lines: PricedLine[], lang: Lang): { text: string; keybo
   return { text: out.join('\n'), keyboard };
 }
 
-export function itemsText(items: OrderItem[], lang: Lang): string {
+export function itemsText(items: OrderItem[], lang: Lang, firstNumber = 1): string {
   return items
     .map((it, i) => {
       const unit = unitName(it, lang);
       const price = it.price != null ? ` × ${money(it.price, lang)} = ${money(it.price * it.qty, lang)}` : '';
-      return `${i + 1}. ${esc(productName(it, lang))} — ${esc(qtyWithUnit(it.qty, unit, lang))}${price}`;
+      return `${i + firstNumber}. ${esc(productName(it, lang))} — ${esc(qtyWithUnit(it.qty, unit, lang))}${price}`;
     })
     .join('\n');
 }
@@ -170,13 +170,20 @@ export function quoteOf(items: OrderItem[]): string {
   return items.map((i) => `${i.id}:${i.qty}:${i.price ?? '-'}`).join('|');
 }
 
+/** Short hash of a quote for the Confirm button's callback_data (64-byte limit). */
+export function quoteHash(quote: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < quote.length; i++) h = Math.imul(h ^ quote.charCodeAt(i), 0x01000193);
+  return (h >>> 0).toString(36);
+}
+
 export function confirmView(items: OrderItem[], d: Draft, lang: Lang, notice?: string): { text: string; keyboard: InlineKeyboard } {
   const t = T[lang];
   const head = notice ? [notice, ''] : [];
   const text = [...head, t.confirmTitle, '', itemsText(items, lang), '', ...totalLines(items, lang), '', draftText(d, lang)].join('\n');
   return {
     text,
-    keyboard: [[{ text: t.confirm, callback_data: 'ok' }], [{ text: t.cancel, callback_data: 'x' }]],
+    keyboard: [[{ text: t.confirm, callback_data: `ok:${quoteHash(quoteOf(items))}` }], [{ text: t.cancel, callback_data: 'x' }]],
   };
 }
 
@@ -238,7 +245,8 @@ export function adminOrderView(o: Order, statusNote?: string): { text: string; k
   lines.push(`${A.lang}: ${o.lang === 'ru' ? 'rus' : 'oʻzbek'}`, '', `<b>${A.items}:</b>`);
   let used = visibleLength([...lines, ...tail].join('\n'));
   let shown = 0;
-  for (const line of itemsText(o.items, 'uz').split('\n')) {
+  for (const item of o.items) {
+    const line = itemsText([item], 'uz', shown + 1);
     const cost = visibleLength(line) + 1;
     if (used + cost > CARD_BUDGET) break;
     lines.push(line);

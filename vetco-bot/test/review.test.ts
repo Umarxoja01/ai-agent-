@@ -15,6 +15,7 @@ import {
   mockNetwork,
   onboard,
   textUpdate,
+  okButton,
   type Net,
 } from './helpers';
 
@@ -79,14 +80,14 @@ describe('steps never swallow receipts and questions', () => {
     await deliver(textUpdate(chat, 'Yetkazib berish qancha?'));
     expect(toAdmin()).toHaveLength(1);
     expect(net.texts(chat).some((t) => t.includes('tugmalardan'))).toBe(true);
-    expect(buttons(net.lastTo(chat))).toEqual(['ok', 'x']);
+    expect(buttons(net.lastTo(chat))[0]).toMatch(/^ok:/);
   });
 
   it('a voice note is a question, not a receipt', async () => {
     const chat = 3004;
     await onboard(chat);
     await toSummary(chat);
-    await deliver(callbackUpdate(chat, 'ok'));
+    await deliver(callbackUpdate(chat, okButton(net, chat)));
     net.clear();
     await deliver(messageUpdate(chat, { voice: { file_id: 'v1' } }));
     expect(toAdmin()[0]!.params.text).toContain('Mijoz xabari');
@@ -156,12 +157,12 @@ describe('checkout safety', () => {
     await onboard(chat);
     await toSummary(chat);
     await env.DB.prepare("UPDATE products SET price = 99000 WHERE id = 'bistrepen'").run();
-    await deliver(callbackUpdate(chat, 'ok'));
+    await deliver(callbackUpdate(chat, okButton(net, chat)));
     expect(await orderCount(chat)).toBe(0);
     const summary = net.lastTo(chat)!.params.text as string;
     expect(summary).toContain('Narx yoki savat oʻzgardi');
     expect(summary).toContain('198 000 soʻm');
-    await deliver(callbackUpdate(chat, 'ok'));
+    await deliver(callbackUpdate(chat, okButton(net, chat)));
     expect(await orderCount(chat)).toBe(1);
     await env.DB.prepare("UPDATE products SET price = NULL WHERE id = 'bistrepen'").run();
   });
@@ -171,7 +172,7 @@ describe('checkout safety', () => {
     await onboard(chat);
     for (let i = 0; i < 6; i++) {
       await toSummary(chat);
-      await deliver(callbackUpdate(chat, 'ok'));
+      await deliver(callbackUpdate(chat, okButton(net, chat)));
     }
     expect(await orderCount(chat)).toBe(5);
     expect(net.lastTo(chat)!.params.text).toContain('+998 90 000 00 00');
@@ -286,7 +287,7 @@ describe('operators chat', () => {
     });
     await onboard(chat);
     await toSummary(chat);
-    await deliver(callbackUpdate(chat, 'ok'));
+    await deliver(callbackUpdate(chat, okButton(net, chat)));
     const id = (await env.DB.prepare('SELECT id FROM orders WHERE chat_id = ?').bind(chat).first<{ id: number }>())!.id;
     await deliver(callbackUpdate(ADMIN_CHAT, `ad:${id}:confirmed`, 777));
     const warning = toAdmin().find((c) => String(c.params.text).includes('mijozga xabar yetmadi'));
@@ -306,7 +307,7 @@ describe('operators chat', () => {
     const chat = 3306;
     await onboard(chat);
     await toSummary(chat);
-    await deliver(callbackUpdate(chat, 'ok'));
+    await deliver(callbackUpdate(chat, okButton(net, chat)));
     expect(net.of('sendMessage').some((c) => c.params.chat_id === String(NEW) && String(c.params.text).includes('Yangi buyurtma'))).toBe(true);
     expect(await getMeta(env.DB, 'admin_chat_id')).toBe(`-100777>${NEW}`);
     // Later updates use the new chat right away, and its members are staff.
@@ -390,5 +391,136 @@ describe('webhook and cards', () => {
     await onboard(3402);
     await deliver(callbackUpdate(3402, 'p:kefen'));
     expect(net.lastTo(3402)!.params.text).toContain('kutish muddatiga');
+  });
+});
+
+describe('second review round', () => {
+  it('an old Confirm button never places a summary the customer did not see', async () => {
+    const chat = 3501;
+    await onboard(chat);
+    await toSummary(chat);
+    const oldOk = okButton(net, chat);
+    await env.DB.prepare("UPDATE products SET price = 99000 WHERE id = 'bistrepen'").run();
+    await deliver(textUpdate(chat, 'ha')); // typed instead of tapping: the summary is shown again
+    expect(net.lastTo(chat)!.params.text).toContain('Narx yoki savat oʻzgardi');
+    await deliver(callbackUpdate(chat, oldOk));
+    expect(await orderCount(chat)).toBe(0);
+    await deliver(callbackUpdate(chat, okButton(net, chat)));
+    expect(await orderCount(chat)).toBe(1);
+    await env.DB.prepare("UPDATE products SET price = NULL WHERE id = 'bistrepen'").run();
+  });
+
+  it("a number answering the operator is not taken for the product card's quantity", async () => {
+    const chat = 3502;
+    await onboard(chat);
+    await deliver(callbackUpdate(chat, 'p:kefen'));
+    await deliver(messageUpdate(chat, { photo: [{ file_id: 'x', width: 9, height: 9 }] }));
+    const row = await env.DB.prepare(`SELECT admin_message_id FROM relay WHERE chat_id = ? AND kind = 'in'`).bind(chat).first<{ admin_message_id: number }>();
+    await deliver(
+      messageUpdate(ADMIN_CHAT, { text: 'Necha bosh mol bor?', reply_to_message: { message_id: row!.admin_message_id, chat: { id: ADMIN_CHAT, type: 'supergroup' }, date: 0 } }, 777),
+    );
+    net.clear();
+    await deliver(textUpdate(chat, '40'));
+    expect((await getSession(env.DB, chat)).cart).toEqual([]);
+    expect(toAdmin().some((c) => String(c.params.text).includes('40'))).toBe(true);
+  });
+
+  it('a reply or an unknown command under a product card is not a quantity', async () => {
+    const chat = 3503;
+    await onboard(chat);
+    await deliver(callbackUpdate(chat, 'p:kefen'));
+    await deliver(textUpdate(chat, '12', { reply_to_message: { message_id: 1, chat: { id: chat, type: 'private' }, date: 0 } }));
+    expect((await getSession(env.DB, chat)).cart).toEqual([]);
+    await deliver(callbackUpdate(chat, 'p:kefen'));
+    net.clear();
+    await deliver(textUpdate(chat, '/menu'));
+    expect(toAdmin()).toHaveLength(0);
+    expect(net.lastTo(chat)!.params.text).toContain('VETCO');
+  });
+
+  it('ignores service messages such as a pin', async () => {
+    const chat = 3504;
+    await onboard(chat);
+    net.clear();
+    await deliver(messageUpdate(chat, { pinned_message: { message_id: 1, chat: { id: chat, type: 'private' }, date: 0 } }));
+    expect(net.calls.filter((c) => c.method !== 'answerCallbackQuery')).toHaveLength(0);
+  });
+
+  it('refuses an album over the daily limit once, not per photo', async () => {
+    const chat = 3505;
+    await onboard(chat);
+    const now = new Date().toISOString();
+    for (let i = 0; i < 30; i++) {
+      await env.DB.prepare(`INSERT INTO relay (admin_chat_id, admin_message_id, chat_id, order_id, kind, created_at) VALUES ('-100777', ?, ?, NULL, 'in', ?)`)
+        .bind(900000 + chat * 100 + i, chat, now)
+        .run();
+    }
+    net.clear();
+    for (let i = 0; i < 4; i++) {
+      await deliver(messageUpdate(chat, { media_group_id: 'big', photo: [{ file_id: `g${i}`, width: 9, height: 9 }] }));
+    }
+    expect(net.texts(chat)).toHaveLength(1);
+    expect(toAdmin()).toHaveLength(0);
+  });
+
+  it('Cancel after only viewing a product says nothing about a checkout', async () => {
+    const chat = 3506;
+    await onboard(chat);
+    await deliver(callbackUpdate(chat, 'p:kefen'));
+    net.clear();
+    await deliver(callbackUpdate(chat, 'x'));
+    expect(net.texts(chat).some((t) => t.includes('toʻxtatildi'))).toBe(false);
+  });
+
+  it('a failed read before the dedup insert lets Telegram redeliver the update', async () => {
+    const realPrepare = env.DB.prepare.bind(env.DB);
+    const flaky = {
+      ...env,
+      DB: { ...env.DB, prepare: (sql: string) => (sql.includes('FROM meta') ? (() => { throw new Error('Network connection lost'); })() : realPrepare(sql)) },
+    } as unknown as typeof env;
+    const update = textUpdate(3507, '/start');
+    const send = async (e: typeof env) => {
+      const ctx = createExecutionContext();
+      const res = await worker.fetch(
+        new Request('https://bot.test/telegram', { method: 'POST', headers: { 'X-Telegram-Bot-Api-Secret-Token': SECRET }, body: JSON.stringify(update) }),
+        e,
+        ctx,
+      );
+      await waitOnExecutionContext(ctx);
+      return res.status;
+    };
+    expect(await send(flaky)).toBe(503);
+    expect(await send(env)).toBe(200);
+    expect(net.texts(3507).length).toBeGreaterThan(0);
+  });
+
+  it('a second group move is recorded against the configured chat, and stale moves are not reported', async () => {
+    await env.DB.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('admin_chat_id', '-100111>-100222')`).run();
+    const health = (await (await worker.fetch(new Request('https://bot.test/health'), env, createExecutionContext())).json()) as Record<string, unknown>;
+    expect(health.admin_chat_moved).toBeUndefined();
+    await deliver(messageUpdate(ADMIN_CHAT, { migrate_to_chat_id: -100444 }, 777));
+    expect(await getMeta(env.DB, 'admin_chat_id')).toBe('-100777>-100444');
+    net.clear();
+    await deliver(messageUpdate(-100444, { text: '/stats' }, 12345));
+    expect(net.texts(-100444).some((t) => t.includes('Bugun'))).toBe(true);
+    await env.DB.prepare("DELETE FROM meta WHERE key = 'admin_chat_id'").run();
+  });
+
+  it('budgets the order card per item even when a name has a line break', () => {
+    const items = Array.from({ length: 40 }, (_, i) => ({
+      id: `p${i}`,
+      name: `Nom ${i}\n${'x'.repeat(60)}`,
+      name_ru: null,
+      qty: 1,
+      price: null,
+      unit_uz: 'flakon',
+      unit_ru: 'флакон',
+    }));
+    const now = new Date().toISOString();
+    const order = { id: 88, chat_id: 1, username: null, lang: 'uz', customer_name: 'A', phone: '+998900000000', region: 'tsh', address: 'B', note: null, items, total: null, status: 'new', admin_message_id: null, sheets_synced: 0, created_at: now, updated_at: now } as Order;
+    const view = adminOrderView(order);
+    const shown = (view.text.match(/^\d+\. Nom/gm) ?? []).length;
+    expect(view.truncated).toBe(shown < 40);
+    if (view.truncated) expect(view.text).toContain(`yana ${40 - shown} ta preparat`);
   });
 });

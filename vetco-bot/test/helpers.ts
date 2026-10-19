@@ -162,3 +162,13 @@ export async function onboard(chatId: number, lang: 'uz' | 'ru' = 'uz'): Promise
   await deliver(textUpdate(chatId, '/start'));
   await deliver(callbackUpdate(chatId, `l:${lang}`));
 }
+
+/** callback_data of the newest Confirm button shown to a chat (it carries the summary hash). */
+export function okButton(net: Net, chatId: number): string {
+  for (const c of [...net.calls].reverse()) {
+    if (String(c.params.chat_id) !== String(chatId)) continue;
+    const ok = buttons(c).find((b) => typeof b === 'string' && b.startsWith('ok:'));
+    if (ok) return ok;
+  }
+  return 'ok:none';
+}

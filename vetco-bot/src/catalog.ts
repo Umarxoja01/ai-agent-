@@ -162,7 +162,7 @@ export function parseCatalog(csv: string): ParseResult {
     };
     const id = get('id').toLowerCase();
     const category = get('category').toLowerCase();
-    const name = get('name');
+    const name = get('name').replace(/\s+/g, ' ');
     if (!ID_RE.test(id)) return errors.push(`${line}-qator: id "${id}" notoʻgʻri (faqat a-z, 0-9, _ va -)`);
     if (seen.has(id)) return errors.push(`${line}-qator: id "${id}" takrorlangan`);
     if (!ID_RE.test(category)) return errors.push(`${line}-qator (${id}): category "${category}" notoʻgʻri`);
@@ -195,7 +195,7 @@ export function parseCatalog(csv: string): ParseResult {
       category_uz: text('category_uz'),
       category_ru: text('category_ru'),
       name: name.slice(0, TEXT_LIMITS.name),
-      name_ru: text('name_ru'),
+      name_ru: text('name_ru')?.replace(/\s+/g, ' ') ?? null,
       maker: text('maker'),
       form_uz: text('form_uz'),
       form_ru: text('form_ru'),

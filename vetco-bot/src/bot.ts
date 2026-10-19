@@ -25,6 +25,7 @@ import {
   phoneKeyboard,
   productCard,
   productName,
+  quoteHash,
   quoteOf,
   totals,
   type PricedLine,
@@ -56,6 +57,13 @@ export const ORDERS_PER_DAY = 5;
 /** A checkout left this long is forgotten, so later receipts and questions reach the operators. */
 const STEP_TTL_MS = 30 * 60_000;
 const CHECKOUT_STEPS = new Set(['name', 'phone', 'region', 'address', 'note', 'saved', 'confirm']);
+/** Message contents copyMessage can copy; service messages (pins, timers...) are not among them. */
+const COPYABLE = ['photo', 'document', 'video', 'voice', 'audio', 'video_note', 'animation', 'sticker', 'location', 'venue', 'poll', 'dice'];
+
+function copyable(msg: TgMessage): boolean {
+  return COPYABLE.some((k) => (msg as unknown as Record<string, unknown>)[k] !== undefined);
+}
+
 /** "15", "15 ta", "15 шт", "15 флаконов" */
 const QTY_RE = /^\s*(\d{1,5})\s*(?:ta|dona|flakon|fl\.?|шт\.?|штук[аи]?|флакон(?:а|ов)?|фл\.?)?\s*$/iu;
 
@@ -183,11 +191,22 @@ async function handleMessage(env: Env, msg: TgMessage, exec: ExecutionContext): 
     await sendMessage(env, chatId, T[ctx.lang].useMenu, mainMenu(ctx.lang));
     return;
   }
-  // Photos, files and voice notes always go to the operators (often a payment receipt).
-  if (msg.text === undefined && !msg.contact) return forwardToOperator(ctx, msg);
+  if (msg.text === undefined && !msg.contact) {
+    // Photos, files and voice notes always go to the operators (often a payment receipt).
+    if (copyable(msg)) return forwardToOperator(ctx, msg);
+    return; // a pin or another service message: nothing to pass on
+  }
 
   if (step.startsWith('qty:')) return onQuantity(ctx, msg, step.slice(4), false);
-  if (step.startsWith('qty?:')) return onQuantity(ctx, msg, step.slice(5), true);
+  if (step.startsWith('qty?:')) {
+    // An unknown command or a reply to another message is not an answer to "how many?".
+    if (cmd || msg.reply_to_message) {
+      s.step = null;
+      await save(ctx);
+    } else {
+      return onQuantity(ctx, msg, step.slice(5), true);
+    }
+  }
   switch (step) {
     case 'name':
       return onName(ctx, msg);
@@ -571,25 +590,29 @@ async function showConfirm(ctx: Ctx, message?: TgMessage, notice?: string): Prom
     return showCart(ctx, undefined, dropped);
   }
   const items = orderItems(lines);
-  ctx.s.draft.quote = quoteOf(items);
+  const quote = quoteOf(items);
+  const changed = !!ctx.s.draft.quote && ctx.s.draft.quote !== quote;
+  ctx.s.draft.quote = quote;
   ctx.s.step = 'confirm';
   await save(ctx);
-  const view = confirmView(items, ctx.s.draft, ctx.lang, dropped ? T[ctx.lang].itemsDropped : notice);
+  const t = T[ctx.lang];
+  const view = confirmView(items, ctx.s.draft, ctx.lang, dropped ? t.itemsDropped : (notice ?? (changed ? t.quoteChanged : undefined)));
   await editOrSend(ctx.env, ctx.chatId, message, view.text, inline(view.keyboard));
 }
 
-async function placeOrder(ctx: Ctx, message?: TgMessage): Promise<string | undefined> {
+/** `shown` is the hash carried by the Confirm button: it names the summary the customer saw. */
+async function placeOrder(ctx: Ctx, shown: string, message?: TgMessage): Promise<string | undefined> {
   const t = T[ctx.lang];
   if (ctx.s.step !== 'confirm') return t.staleButton;
   const { lines, dropped } = await pricedCart(ctx);
   const items = orderItems(lines);
   if (!lines.length || !draftComplete(ctx.s.draft)) {
-    await showConfirm(ctx, undefined, dropped ? t.itemsDropped : undefined);
+    await showConfirm(ctx, message, dropped ? t.itemsDropped : undefined);
     return undefined;
   }
-  if (dropped || quoteOf(items) !== ctx.s.draft.quote) {
-    // Prices or the cart changed since the summary was shown: show the new one instead.
-    await showConfirm(ctx, undefined, dropped ? t.itemsDropped : t.quoteChanged);
+  if (dropped || quoteHash(quoteOf(items)) !== shown) {
+    // Prices or the cart changed since that summary: replace it with the current one.
+    await showConfirm(ctx, message, dropped ? t.itemsDropped : t.quoteChanged);
     return undefined;
   }
   const since = new Date(Date.now() - 86400_000).toISOString();
@@ -654,14 +677,24 @@ async function forwardToOperator(ctx: Ctx, msg: TgMessage): Promise<void> {
     await sendMessage(env, chatId, t.error);
     return;
   }
-  // Every photo of an album arrives as its own message: one header and one answer per album.
-  const album = msg.media_group_id ?? null;
-  if (album && (await db.mediaGroupSeen(env.DB, chatId, album))) {
-    await copyToOperators(env, chatId, msg.message_id, { chatId, orderId: null, kind: 'copy', mediaGroup: album });
-    return;
+  // From here the conversation is with the operators: a later "40" answers them, not a product card.
+  if (ctx.s.step?.startsWith('qty?:')) {
+    ctx.s.step = null;
+    await save(ctx);
   }
   const since = new Date(Date.now() - 86400_000).toISOString();
-  if ((await db.countInbound(env.DB, chatId, since)) >= MESSAGES_PER_DAY) {
+  const overLimit = (await db.countInbound(env.DB, chatId, since)) >= MESSAGES_PER_DAY;
+  // Every photo of an album arrives as its own message: one header, one answer and one count per album.
+  const album = msg.media_group_id;
+  if (album) {
+    const first = await db.claimAlbum(env.DB, chatId, album, overLimit ? 'refused' : 'sent');
+    if (first === 'refused') return;
+    if (first === 'sent') {
+      await copyToOperators(env, chatId, msg.message_id, { chatId, orderId: null, kind: 'copy' });
+      return;
+    }
+  }
+  if (overLimit) {
     await sendMessage(env, chatId, t.tooManyMessages(env.CONTACT_PHONE ? esc(env.CONTACT_PHONE) : null));
     return;
   }
@@ -678,8 +711,8 @@ async function forwardToOperator(ctx: Ctx, msg: TgMessage): Promise<void> {
     last && last.status !== 'cancelled' && Date.now() - Date.parse(last.created_at) < 14 * 86400_000 ? last : undefined;
   const header = recent ? A.receipt(recent.id, who) : A.question(who);
   const orderId = recent?.id ?? null;
-  await postToOperators(env, `${header}\n\n${A.replyHint}`, { chatId, orderId, kind: 'in', mediaGroup: album });
-  await copyToOperators(env, chatId, msg.message_id, { chatId, orderId, kind: 'copy', mediaGroup: album });
+  await postToOperators(env, `${header}\n\n${A.replyHint}`, { chatId, orderId, kind: 'in' });
+  await copyToOperators(env, chatId, msg.message_id, { chatId, orderId, kind: 'copy' });
   await sendMessage(env, chatId, recent ? t.receiptForwarded(recent.id) : t.questionForwarded);
 }
 
@@ -792,19 +825,15 @@ async function customerCallback(ctx: Ctx, data: string, message: TgMessage): Pro
       await showConfirm(ctx);
       return undefined;
     case 'ok':
-      return placeOrder(ctx, message);
-    case 'x': {
-      const inCheckout = !!s.step && !s.step.startsWith('lang:');
-      s.step = null;
-      await save(ctx);
+      return placeOrder(ctx, a, message);
+    case 'x':
       try {
         await tg(ctx.env, 'editMessageReplyMarkup', { chat_id: ctx.chatId, message_id: message.message_id });
       } catch {
         // already without buttons
       }
-      if (inCheckout) await sendMessage(ctx.env, ctx.chatId, T[ctx.lang].checkoutCancelled, mainMenu(ctx.lang));
+      await leaveStep(ctx);
       return undefined;
-    }
     case 'ord':
       await showOrders(ctx);
       return undefined;

@@ -1,6 +1,6 @@
 import type { Env } from './env';
 import * as db from './db';
-import { ADMIN_CHAT_OVERRIDE, adminChatId, notifyNewOrder, withAdminChatOverride } from './admin';
+import { activeChatMove, adminChatId, notifyNewOrder, withAdminChatOverride } from './admin';
 import { handleUpdate } from './bot';
 import { syncCatalog } from './catalog';
 import { pushOrder, sheetRow } from './sheets';
@@ -55,8 +55,9 @@ async function telegramWebhook(request: Request, env: Env, exec: ExecutionContex
   // Nothing has happened yet if this first write fails: ask Telegram to deliver again.
   let fresh: boolean;
   try {
-    fresh = await db.markUpdate(env.DB, update.update_id);
+    // Reads first: once the update id is stored, a redelivery would be skipped.
     env = await withAdminChatOverride(env);
+    fresh = await db.markUpdate(env.DB, update.update_id);
   } catch (err) {
     console.error(`update ${update.update_id}: ${err instanceof Error ? err.message : err}`);
     return new Response('retry', { status: 503 });
@@ -76,7 +77,7 @@ async function health(env: Env): Promise<Response> {
     `SELECT (SELECT COUNT(*) FROM products WHERE active = 1) AS products,
             (SELECT COUNT(*) FROM orders WHERE admin_message_id IS NULL) AS unsent_cards`,
   ).first<{ products: number; unsent_cards: number }>();
-  const moved = await db.getMeta(env.DB, ADMIN_CHAT_OVERRIDE);
+  const moved = await activeChatMove(env);
   return json({
     ok: true,
     products: row?.products ?? 0,
@@ -154,7 +155,7 @@ async function setup(env: Env, url: URL): Promise<Response> {
   await tg(env, 'setMyCommands', { scope: privateChats, commands: customer.uz });
   await tg(env, 'setMyCommands', { scope: privateChats, language_code: 'ru', commands: customer.ru });
   // Groups get no customer commands: they do nothing there.
-  await tg(env, 'setMyCommands', { commands: [] });
+  await tg(env, 'deleteMyCommands', {});
   const warnings: string[] = [];
   const adminChat = adminChatId(env);
   if (!adminChat) {
