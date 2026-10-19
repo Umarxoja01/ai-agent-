@@ -1,8 +1,8 @@
 # Jarvis: shu ishda yozilgan barcha kod
 
-- Repo: jarvis-project, holat 367c57c (asos 6d300b3 - bilak qatlamidan oldingi commit)
-- Yangi fayllar: 50 (to'liq matni bilan); o'zgartirilgan mavjud fayllar: 22 (faqat farqi)
-- Jami qator: 8775 (yangi fayllar + qo'shilgan qatorlar)
+- Repo: jarvis-project, holat 5f2088b (asos 6d300b3 - bilak qatlamidan oldingi commit)
+- Yangi fayllar: 55 (to'liq matni bilan); o'zgartirilgan mavjud fayllar: 22 (faqat farqi)
+- Jami qator: 8966 (yangi fayllar + qo'shilgan qatorlar)
 - Hujjatlar (*.md: VERIFICATION, README, HANDOFF, docs/) kirmagan.
 - Bu o'qish va saqlash uchun nusxa. Jarvis o'zi modullarga bo'lingan holda ishlaydi (Module Protocol V1); bu faylni ishga tushirib bo'lmaydi.
 - Qayta yaratish: `node scripts/export-code-bundle.mjs 6d300b3 <fayl.md>`
@@ -38,7 +38,7 @@
   - [tools/smart-router/index.ts](#tools-smart-router-index-ts) — mavjud fayl, +33 / -11 qator
   - [tools/video-generator/index.ts](#tools-video-generator-index-ts) — mavjud fayl, +14 / -1 qator
 - **Dashboard**
-  - [dashboard/app.ts](#dashboard-app-ts) — yangi, 392 qator
+  - [dashboard/app.ts](#dashboard-app-ts) — yangi, 396 qator
   - [dashboard/public/control.js](#dashboard-public-control-js) — yangi, 133 qator
   - [dashboard/public/app.js](#dashboard-public-app-js) — mavjud fayl, +2 / -2 qator
   - [dashboard/public/index.html](#dashboard-public-index-html) — mavjud fayl, +1 / -0 qator
@@ -52,10 +52,14 @@
 - **Skriptlar (scripts/)**
   - [scripts/export-code-bundle.mjs](#scripts-export-code-bundle-mjs) — yangi, 79 qator
   - [scripts/install-jarvis-daemon.ps1](#scripts-install-jarvis-daemon-ps1) — yangi, 14 qator
+  - [scripts/install-n8n.ps1](#scripts-install-n8n-ps1) — yangi, 76 qator
   - [scripts/jarvis-call.mjs](#scripts-jarvis-call-mjs) — yangi, 65 qator
   - [scripts/jarvis-daemon.ps1](#scripts-jarvis-daemon-ps1) — yangi, 40 qator
   - [scripts/jarvis-resume.cmd](#scripts-jarvis-resume-cmd) — yangi, 11 qator
   - [scripts/jarvis-stop.cmd](#scripts-jarvis-stop-cmd) — yangi, 10 qator
+  - [scripts/n8n-workflows/jarvis-callback.json](#scripts-n8n-workflows-jarvis-callback-json) — yangi, 49 qator
+  - [scripts/n8n-workflows/jarvis-ping.json](#scripts-n8n-workflows-jarvis-ping-json) — yangi, 29 qator
+  - [scripts/phase10-verify.ps1](#scripts-phase10-verify-ps1) — yangi, 20 qator
   - [scripts/phase2-verify.ps1](#scripts-phase2-verify-ps1) — yangi, 41 qator
   - [scripts/phase3-verify.ps1](#scripts-phase3-verify-ps1) — yangi, 43 qator
   - [scripts/phase4-verify.ps1](#scripts-phase4-verify-ps1) — yangi, 53 qator
@@ -66,10 +70,11 @@
   - [scripts/phase9-verify.ps1](#scripts-phase9-verify-ps1) — yangi, 42 qator
   - [scripts/poll-jobs.mjs](#scripts-poll-jobs-mjs) — yangi, 88 qator
   - [scripts/uninstall-jarvis-daemon.ps1](#scripts-uninstall-jarvis-daemon-ps1) — yangi, 9 qator
+  - [scripts/uninstall-n8n.ps1](#scripts-uninstall-n8n-ps1) — yangi, 9 qator
 - **Testlar (test/)**
   - [test/approval-gate.test.ts](#test-approval-gate-test-ts) — yangi, 329 qator
   - [test/assistant.test.ts](#test-assistant-test-ts) — yangi, 229 qator
-  - [test/dashboard.test.ts](#test-dashboard-test-ts) — yangi, 289 qator
+  - [test/dashboard.test.ts](#test-dashboard-test-ts) — yangi, 293 qator
   - [test/dev-agent.test.ts](#test-dev-agent-test-ts) — yangi, 208 qator
   - [test/farm.test.ts](#test-farm-test-ts) — yangi, 172 qator
   - [test/file-lock.test.ts](#test-file-lock-test-ts) — yangi, 35 qator
@@ -5517,7 +5522,7 @@ index 28a6c45..e5ede4d 100644
 
 ### dashboard/app.ts
 
-Yangi fayl, 392 qator.
+Yangi fayl, 396 qator.
 
 ```ts
 // ===================================================================
@@ -5664,6 +5669,8 @@ export function createDashboard(options: DashboardOptions) {
   const allowedOrigins = new Set([`http://127.0.0.1:${options.port}`, `http://localhost:${options.port}`]);
   // DNS rebinding guard: a foreign domain pointed at 127.0.0.1 arrives with its own Host header.
   const allowedHosts = new Set([`127.0.0.1:${options.port}`, `localhost:${options.port}`]);
+  // n8n in Docker Desktop reaches this machine as host.docker.internal: accepted for the token-guarded hook only.
+  const hookHosts = new Set([...allowedHosts, `host.docker.internal:${options.port}`]);
   const startedAt = Date.now();
   const inboundToken = options.jarvisHome ? loadOrCreateToken(join(options.jarvisHome, 'n8n', 'inbound')).token : null;
 
@@ -5839,7 +5846,9 @@ export function createDashboard(options: DashboardOptions) {
   // ---------------------------------------------------------------- router
   async function handle(req: IncomingMessage, res: ServerResponse) {
     try {
-      if (!allowedHosts.has(String(req.headers.host ?? '').toLowerCase())) return json(res, 421, { error: 'Host ruxsat etilmagan' });
+      const host = String(req.headers.host ?? '').toLowerCase();
+      const isHook = (req.url ?? '').split('?')[0] === '/hook/n8n';
+      if (!allowedHosts.has(host) && !(isHook && hookHosts.has(host))) return json(res, 421, { error: 'Host ruxsat etilmagan' });
       const url = new URL(req.url || '/', `http://${req.headers.host}`);
       if (url.pathname === '/healthz' && req.method === 'GET') return json(res, 200, { ok: true, service: 'jarvis-dashboard', uptimeSeconds: Math.round((Date.now() - startedAt) / 1000) });
       if (url.pathname === '/hook/n8n') {
@@ -6492,6 +6501,88 @@ Start-ScheduledTask -TaskName $name
 Write-Output ('registered and started: ' + $name)
 ```
 
+### scripts/install-n8n.ps1
+
+Yangi fayl, 76 qator.
+
+```powershell
+# Installs n8n (Jarvis's "hands", handoff section 3) as a Docker container:
+#   - listens on 127.0.0.1:5678 only, restarts with Docker Desktop, data in the n8n_data volume;
+#   - telemetry, version checks and personalization off; timezone Asia/Tashkent;
+#   - gets the Jarvis hook URL and its token through <JARVIS_HOME>\n8n\container.env (the token is
+#     copied from <JARVIS_HOME>\n8n\inbound\token and never printed).
+# Then imports the two test workflows from scripts\n8n-workflows, activates them and registers
+# them in <JARVIS_HOME>\n8n\webhooks.json (both readOnly: they only echo / read jarvis_health).
+# The n8n owner account (email + password) is created by Umar at http://127.0.0.1:5678 - not here.
+# Undo: scripts\uninstall-n8n.ps1 (add -RemoveData to delete the n8n_data volume too).
+param(
+  [string]$JarvisHome = (Join-Path $env:USERPROFILE 'Jarvis\data'),
+  [string]$Image = 'docker.n8n.io/n8nio/n8n:latest'
+)
+$ErrorActionPreference = 'Continue'
+$proj = Split-Path -Parent $PSScriptRoot
+$docker = (Get-Command docker -ErrorAction SilentlyContinue).Source
+if (-not $docker) { $docker = Join-Path $env:LOCALAPPDATA 'Programs\DockerDesktop\resources\bin\docker.exe' }
+& $docker info --format '{{.ServerVersion}}' 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) { Write-Output 'Docker engine ishlamayapti - Docker Desktop ni oching'; exit 2 }
+
+$n8nDir = Join-Path $JarvisHome 'n8n'
+New-Item -ItemType Directory -Force $n8nDir | Out-Null
+$tokenFile = Join-Path $n8nDir 'inbound\token'
+if (-not (Test-Path $tokenFile)) { Write-Output "inbound token yo'q ($tokenFile) - dashboard (JarvisDaemon) bir marta ishga tushsin"; exit 2 }
+$envFile = Join-Path $n8nDir 'container.env'
+Set-Content -Path $envFile -Encoding ASCII -Value @(
+  'GENERIC_TIMEZONE=Asia/Tashkent', 'TZ=Asia/Tashkent',
+  'N8N_DIAGNOSTICS_ENABLED=false', 'N8N_VERSION_NOTIFICATIONS_ENABLED=false', 'N8N_PERSONALIZATION_ENABLED=false',
+  'N8N_SECURE_COOKIE=false',
+  # workflows read the hook URL/token with {{ $env.* }}; the token only reaches Jarvis's short hook allow-list
+  'N8N_BLOCK_ENV_ACCESS_IN_NODE=false',
+  'JARVIS_HOOK_URL=http://host.docker.internal:7331/hook/n8n',
+  ('JARVIS_HOOK_TOKEN=' + (Get-Content $tokenFile -Raw).Trim())
+)
+Write-Output ('env file: ' + $envFile + ' (token yozildi, ko''rsatilmaydi)')
+
+& $docker rm -f n8n 2>$null | Out-Null
+& $docker run -d --name n8n --restart unless-stopped -p 127.0.0.1:5678:5678 -v n8n_data:/home/node/.n8n --env-file $envFile $Image | Out-Null
+function WaitN8n([int]$seconds) {
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  while ($sw.Elapsed.TotalSeconds -lt $seconds) {
+    try { if ((Invoke-RestMethod -Uri 'http://127.0.0.1:5678/healthz' -TimeoutSec 3).status -eq 'ok') { return [Math]::Round($sw.Elapsed.TotalSeconds) } } catch { }
+    Start-Sleep -Seconds 2
+  }
+  return -1
+}
+Write-Output ('n8n healthz after ' + (WaitN8n 180) + ' s')
+Write-Output ('n8n version: ' + (& $docker exec n8n n8n --version 2>$null))
+
+# Import the test workflows and activate them (CLI; the command name differs between n8n versions).
+$wfDir = Join-Path $proj 'scripts\n8n-workflows'
+foreach ($wf in Get-ChildItem $wfDir -Filter '*.json') {
+  & $docker cp $wf.FullName ('n8n:/tmp/' + $wf.Name) | Out-Null
+  # Build "--name=value" arguments as one string first: PowerShell 5.1 splits --x=(expr) into two.
+  $inputArg = '--input=/tmp/' + $wf.Name
+  $out = & $docker exec n8n n8n import:workflow $inputArg 2>&1 | Where-Object { $_ -notmatch 'license' } | Select-Object -Last 2
+  Write-Output ('import ' + $wf.Name + ': ' + ($out -join ' '))
+  $id = (Get-Content $wf.FullName -Raw | ConvertFrom-Json).id
+  $idArg = '--id=' + $id
+  $act = & $docker exec n8n n8n update:workflow $idArg '--active=true' 2>&1 | Where-Object { $_ -notmatch 'license' } | Select-Object -Last 1
+  if ($LASTEXITCODE -ne 0) { $act = & $docker exec n8n n8n publish:workflow $idArg 2>&1 | Where-Object { $_ -notmatch 'license' } | Select-Object -Last 1 }
+  Write-Output ('activate ' + $id + ': ' + $act)
+}
+& $docker restart n8n | Out-Null
+Write-Output ('n8n healthz after restart ' + (WaitN8n 180) + ' s')
+
+# Register them for Jarvis (n8n_query / n8n_trigger).
+$hooks = @{ webhooks = @(
+  @{ name = 'jarvis-ping'; url = 'http://127.0.0.1:5678/webhook/jarvis-ping'; readOnly = $true; description = "Sinov: Jarvis yuborgan ma'lumotni qaytaradi" },
+  @{ name = 'jarvis-callback'; url = 'http://127.0.0.1:5678/webhook/jarvis-callback'; readOnly = $true; description = "Sinov: n8n Jarvis'ning /hook/n8n ga jarvis_health so'raydi" }
+) }
+$hooksFile = Join-Path $n8nDir 'webhooks.json'
+if (Test-Path $hooksFile) { Write-Output ('webhooks.json bor - o''zgartirilmadi: ' + $hooksFile) }
+else { Set-Content -Path $hooksFile -Value ($hooks | ConvertTo-Json -Depth 5) -Encoding UTF8; Write-Output ('webhooks.json yozildi: ' + $hooksFile) }
+Write-Output 'Keyingi qadam (Umar): http://127.0.0.1:5678 da egasining hisobini yarating.'
+```
+
 ### scripts/jarvis-call.mjs
 
 Yangi fayl, 65 qator.
@@ -6640,6 +6731,122 @@ if not exist "%HOME_DIR%" mkdir "%HOME_DIR%"
 echo paused %date% %time% by %USERNAME%> "%HOME_DIR%\KILL"
 echo JARVIS PAUSED - send/pay/irreversible tool'lar to'xtatildi: %HOME_DIR%\KILL
 echo Davom etish: scripts\jarvis-resume.cmd
+```
+
+### scripts/n8n-workflows/jarvis-callback.json
+
+Yangi fayl, 49 qator.
+
+```json
+{
+  "id": "JarvisCallback01",
+  "name": "Jarvis callback (sinov: n8n -> Jarvis)",
+  "active": true,
+  "settings": { "executionOrder": "v1" },
+  "nodes": [
+    {
+      "id": "6b1f2c1e-0002-4a51-9a51-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "8f0c1b8e-0002-4c3e-9d2a-0000000000b1",
+      "parameters": { "httpMethod": "POST", "path": "jarvis-callback", "responseMode": "lastNode", "options": {} }
+    },
+    {
+      "id": "6b1f2c1e-0002-4a51-9a51-000000000002",
+      "name": "Ask Jarvis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.JARVIS_HOOK_URL }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "x-jarvis-n8n-token", "value": "={{ $env.JARVIS_HOOK_TOKEN }}" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"tool\":\"jarvis_health\",\"args\":{}}",
+        "options": {}
+      }
+    },
+    {
+      "id": "6b1f2c1e-0002-4a51-9a51-000000000003",
+      "name": "Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 0],
+      "parameters": {
+        "jsCode": "const r = $input.first().json || {};\nconst d = r.data || {};\nreturn [{ json: { jarvisAnswered: r.success === true, tools: d.tools ?? null, modules: d.modules ?? null, paused: d.paused ?? null, at: new Date().toISOString() } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Ask Jarvis", "type": "main", "index": 0 }]] },
+    "Ask Jarvis": { "main": [[{ "node": "Summary", "type": "main", "index": 0 }]] }
+  }
+}
+```
+
+### scripts/n8n-workflows/jarvis-ping.json
+
+Yangi fayl, 29 qator.
+
+```json
+{
+  "id": "JarvisPing000001",
+  "name": "Jarvis ping (sinov)",
+  "active": true,
+  "settings": { "executionOrder": "v1" },
+  "nodes": [
+    {
+      "id": "6b1f2c1e-0001-4a51-9a51-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "8f0c1b8e-0001-4c3e-9d2a-0000000000a1",
+      "parameters": { "httpMethod": "POST", "path": "jarvis-ping", "responseMode": "lastNode", "options": {} }
+    },
+    {
+      "id": "6b1f2c1e-0001-4a51-9a51-000000000002",
+      "name": "Pong",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0],
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body || {};\nreturn [{ json: { pong: true, from: b.source || null, webhook: b.webhook || null, echo: b.data || null, at: new Date().toISOString() } }];"
+      }
+    }
+  ],
+  "connections": { "Webhook": { "main": [[{ "node": "Pong", "type": "main", "index": 0 }]] } }
+}
+```
+
+### scripts/phase10-verify.ps1
+
+Yangi fayl, 20 qator.
+
+```powershell
+# Live Jarvis <-> n8n check after scripts\install-n8n.ps1. No paid call, nothing leaves the PC:
+# both test workflows run inside the local n8n and only echo / read jarvis_health.
+$ErrorActionPreference = 'Continue'
+Set-Location C:\Users\tukht\Jarvis\jarvis-project
+$tmp = Join-Path $env:TEMP 'jarvis-p10'
+New-Item -ItemType Directory -Force $tmp | Out-Null
+function Args([string]$name, [string]$json) { $p = Join-Path $tmp $name; Set-Content -Path $p -Value $json -Encoding UTF8; '@' + $p }
+function Call([string]$tool, [string]$argsRef, [string]$pattern) {
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  $lines = node scripts/jarvis-call.mjs $tool $argsRef 2>$null | Select-String -Pattern $pattern | Select-Object -First 8 | ForEach-Object { $_.Line.Trim() }
+  Write-Output ($tool + ' (' + [Math]::Round($sw.Elapsed.TotalSeconds, 1) + ' s): ' + ($lines -join ' '))
+}
+Call 'n8n_status' '{}' '"configured"|"reachable"|"detail"|"name"|"readOnly"'
+Call 'n8n_query' (Args 'ping.json' '{"name":"jarvis-ping","data":{"salom":"n8n","sana":"2026-10-19"}}') '"success"|"status"|pong|echo|"error"'
+Call 'n8n_query' (Args 'cb.json' '{"name":"jarvis-callback"}') '"success"|"status"|jarvisAnswered|tools|"error"'
+Call 'n8n_trigger' (Args 'trig.json' '{"name":"jarvis-ping"}') '"success"|"error"'
+Call 'hands_status' '{}' 'n8n'
+Remove-Item -Recurse -Force $tmp
+Write-Output PHASE10_DONE
 ```
 
 ### scripts/phase2-verify.ps1
@@ -7174,6 +7381,21 @@ Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction SilentlyCo
 Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -like '*jarvis-daemon.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*dist\dashboard\server.js*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 Write-Output ('removed: ' + $name)
+```
+
+### scripts/uninstall-n8n.ps1
+
+Yangi fayl, 9 qator.
+
+```powershell
+# Removes the n8n container. Its data (workflows, credentials, owner account) stays in the n8n_data
+# volume unless -RemoveData is given. Jarvis's webhooks.json and container.env are left in place.
+param([switch]$RemoveData)
+$docker = (Get-Command docker -ErrorAction SilentlyContinue).Source
+if (-not $docker) { $docker = Join-Path $env:LOCALAPPDATA 'Programs\DockerDesktop\resources\bin\docker.exe' }
+& $docker rm -f n8n
+if ($RemoveData) { & $docker volume rm n8n_data }
+Write-Output ('n8n removed' + ($(if ($RemoveData) { ' (with data)' } else { ' (data kept in volume n8n_data)' })))
 ```
 
 ## Testlar (test/)
@@ -7750,7 +7972,7 @@ describe('personal-assistant: file -> task -> reminder', () => {
 
 ### test/dashboard.test.ts
 
-Yangi fayl, 289 qator.
+Yangi fayl, 293 qator.
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -8011,6 +8233,10 @@ describe('dashboard: control Jarvis through the registry', () => {
     expect((await hook({ tool: 'jarvis_health' }, 'tok-123')).status).toBe(401); // the dashboard token is not the n8n token
     expect((await call('GET', '/hook/n8n', undefined, { 'x-jarvis-n8n-token': tok })).status).toBe(405);
     expect((await call('POST', '/hook/n8n', { tool: 'jarvis_health' }, { host: 'evil.example:7399', 'x-jarvis-n8n-token': tok })).status).toBe(421);
+    // n8n in Docker: host.docker.internal works for the hook, never for the page or the API
+    expect((await call('POST', '/hook/n8n', { tool: 'jarvis_health' }, { host: 'host.docker.internal:7399', 'x-jarvis-n8n-token': tok })).status).toBe(200);
+    expect((await call('GET', '/', undefined, { host: 'host.docker.internal:7399' })).status).toBe(421);
+    expect((await call('GET', '/api/status', undefined, { host: 'host.docker.internal:7399' })).status).toBe(421);
     const intake = await hook({ tool: 'assistant_intake', args: { text: '- ertaga soat 9 da veterinarga qo\'ng\'iroq', create: true } });
     expect(intake.status).toBe(200);
     expect(intake.json.data).toMatchObject({ mode: 'created', source: 'n8n', tasks: 1 });
