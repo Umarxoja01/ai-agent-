@@ -1,0 +1,10 @@
+id,sort,category,category_uz,category_ru,name,name_ru,maker,form_uz,form_ru,ingredient,description_uz,description_ru,dose_uz,dose_ru,dose_verified,unit_uz,unit_ru,price,in_stock,active,photo_url,alternatives
+bistrepen,10,antibiotik,Antibiotiklar,Антибиотики,Bistrepen,Бистрепен,Brovafarma,"Inʼeksiya uchun suspenziya, 100 ml","Суспензия для инъекций, 100 мл",,,,"Qoʻy, echki: 1 ml / 10 kg tirik vazn; mol: 1 ml / 20 kg tirik vazn","Овцы, козы: 1 мл / 10 кг живой массы; КРС: 1 мл / 20 кг живой массы",yoʻq,flakon,флакон,,ha,ha,,
+kefen,20,ogriq,Ogʻriq qoldiruvchi va isitma tushiruvchi,Обезболивающие и жаропонижающие,Kefen,Кефен,Brovafarma,"Inʼeksiya eritmasi, 100 ml","Раствор для инъекций, 100 мл",ketoprofen,,,4 ml / 100 kg tirik vazn,4 мл / 100 кг живой массы,yoʻq,flakon,флакон,,ha,ha,,fluneks
+fluneks,30,ogriq,Ogʻriq qoldiruvchi va isitma tushiruvchi,Обезболивающие и жаропонижающие,Fluneks,Флунекс,NITA-FARM,100 ml,100 мл,fluniksin meglumin,,,4 ml / 100 kg tirik vazn,4 мл / 100 кг живой массы,yoʻq,flakon,флакон,,ha,ha,,kefen
+butofan,40,vitamin,Vitaminlar,Витамины,Butofan,Бутофан,NITA-FARM,100 ml,100 мл,"butafosfan, siankobalamin",,,1 ml / 20 kg tirik vazn,1 мл / 20 кг живой массы,yoʻq,flakon,флакон,,ha,ha,,fosbevit
+fosbevit,50,vitamin,Vitaminlar,Витамины,Fos-Bevit,Фос-Бевит,Brovafarma,"Inʼeksiya eritmasi, 100 ml","Раствор для инъекций, 100 мл",,,,1 ml / 20 kg tirik vazn,1 мл / 20 кг живой массы,yoʻq,flakon,флакон,,ha,ha,,butofan
+azitronit,60,boshqa,Boshqa preparatlar,Другие препараты,Azitronit,Азитронит,,,,,,,,,yoʻq,flakon,флакон,,ha,yoʻq,,
+tseftioklin,70,boshqa,Boshqa preparatlar,Другие препараты,Tseftioklin,Цефтиоклин,,,,,,,,,yoʻq,flakon,флакон,,ha,yoʻq,,
+kaltsiy_borglyukonat,80,boshqa,Boshqa preparatlar,Другие препараты,Kalsiy borglyukonat,Кальция борглюконат,,,,,,,,,yoʻq,flakon,флакон,,ha,yoʻq,,
+kofein_benzoat,90,boshqa,Boshqa preparatlar,Другие препараты,Kofein-natriy benzoat,Кофеин-бензоат натрия,,,,,,,,,yoʻq,flakon,флакон,,ha,yoʻq,,
