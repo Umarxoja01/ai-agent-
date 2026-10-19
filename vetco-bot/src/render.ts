@@ -1,7 +1,7 @@
 import type { Env } from './env';
 import type { Draft, Order, OrderItem, Product } from './db';
 import { A, MENU, STATUS, T, regionName, type Lang, type Status } from './i18n';
-import type { InlineKeyboard, ReplyKeyboard } from './tg';
+import { visibleLength, type InlineKeyboard, type ReplyKeyboard } from './tg';
 import { esc, groupDigits } from './util';
 
 export function productName(p: { name: string; name_ru: string | null }, lang: Lang): string {
@@ -20,6 +20,30 @@ export function money(n: number, lang: Lang): string {
   return T[lang].sum(groupDigits(n));
 }
 
+/** Russian nouns change after numbers: 1 флакон, 2 флакона, 5 флаконов. */
+const RU_UNIT_FORMS: Record<string, [string, string, string]> = {
+  флакон: ['флакон', 'флакона', 'флаконов'],
+  упаковка: ['упаковка', 'упаковки', 'упаковок'],
+  коробка: ['коробка', 'коробки', 'коробок'],
+  бутылка: ['бутылка', 'бутылки', 'бутылок'],
+  ампула: ['ампула', 'ампулы', 'ампул'],
+  пакет: ['пакет', 'пакета', 'пакетов'],
+  канистра: ['канистра', 'канистры', 'канистр'],
+  шприц: ['шприц', 'шприца', 'шприцев'],
+  туба: ['туба', 'тубы', 'туб'],
+  банка: ['банка', 'банки', 'банок'],
+  штука: ['штука', 'штуки', 'штук'],
+};
+
+export function qtyWithUnit(n: number, unit: string, lang: Lang): string {
+  const forms = lang === 'ru' ? RU_UNIT_FORMS[unit.toLowerCase()] : undefined;
+  if (!forms) return `${n} ${unit}`;
+  const d = n % 10;
+  const h = n % 100;
+  const form = d === 1 && h !== 11 ? 0 : d >= 2 && d <= 4 && (h < 12 || h > 14) ? 1 : 2;
+  return `${n} ${forms[form]}`;
+}
+
 export function mainMenu(lang: Lang): ReplyKeyboard {
   return {
     keyboard: [
@@ -32,12 +56,10 @@ export function mainMenu(lang: Lang): ReplyKeyboard {
   };
 }
 
+/** Share-phone button on top of the usual menu, so leaving the phone step never strands the customer. */
 export function phoneKeyboard(lang: Lang): ReplyKeyboard {
-  return {
-    keyboard: [[{ text: T[lang].sharePhone, request_contact: true }], [{ text: MENU.catalog[lang] }]],
-    resize_keyboard: true,
-    one_time_keyboard: true,
-  };
+  const menu = mainMenu(lang);
+  return { ...menu, keyboard: [[{ text: T[lang].sharePhone, request_contact: true }], ...menu.keyboard] };
 }
 
 export const QTY_PRESETS = [1, 2, 5, 10, 20, 50];
@@ -59,7 +81,9 @@ export function productCard(p: Product, lang: Lang, alternatives: Product[]): { 
   lines.push(p.in_stock ? t.inStock : t.outOfStock);
   const dose = lang === 'ru' ? p.dose_ru || p.dose_uz : p.dose_uz || p.dose_ru;
   if (p.dose_verified && dose) lines.push('', `<b>${t.dose}:</b> ${esc(dose)}`);
-  if (alternatives.length) lines.push('', `${t.alternative}: ${alternatives.map((a) => esc(productName(a, lang))).join(', ')}`);
+  if (alternatives.length) {
+    lines.push('', `${t.alternative(alternatives.length)}: ${alternatives.map((a) => esc(productName(a, lang))).join(', ')}`);
+  }
   lines.push('', `<i>${t.vetNote}</i>`, '', esc(t.howMany(unit)));
 
   const keyboard: InlineKeyboard = [
@@ -105,7 +129,7 @@ export function cartView(lines: PricedLine[], lang: Lang): { text: string; keybo
   lines.forEach((l, i) => {
     const unit = unitName(l.product, lang);
     const price = l.product.price != null ? ` = ${money(l.product.price * l.qty, lang)}` : '';
-    out.push(`${i + 1}. ${esc(productName(l.product, lang))} — ${l.qty} ${esc(unit)}${price}`);
+    out.push(`${i + 1}. ${esc(productName(l.product, lang))} — ${esc(qtyWithUnit(l.qty, unit, lang))}${price}`);
   });
   out.push('', ...totalLines(lines.map((l) => ({ qty: l.qty, price: l.product.price })), lang));
   const keyboard: InlineKeyboard = lines.map((l) => [
@@ -124,7 +148,7 @@ export function itemsText(items: OrderItem[], lang: Lang): string {
     .map((it, i) => {
       const unit = unitName(it, lang);
       const price = it.price != null ? ` × ${money(it.price, lang)} = ${money(it.price * it.qty, lang)}` : '';
-      return `${i + 1}. ${esc(productName(it, lang))} — ${it.qty} ${esc(unit)}${price}`;
+      return `${i + 1}. ${esc(productName(it, lang))} — ${esc(qtyWithUnit(it.qty, unit, lang))}${price}`;
     })
     .join('\n');
 }
@@ -141,9 +165,15 @@ export function draftText(d: Draft, lang: Lang): string {
   return out.join('\n');
 }
 
-export function confirmView(items: OrderItem[], d: Draft, lang: Lang): { text: string; keyboard: InlineKeyboard } {
+/** Fingerprint of what the customer approves: lines, quantities and prices. */
+export function quoteOf(items: OrderItem[]): string {
+  return items.map((i) => `${i.id}:${i.qty}:${i.price ?? '-'}`).join('|');
+}
+
+export function confirmView(items: OrderItem[], d: Draft, lang: Lang, notice?: string): { text: string; keyboard: InlineKeyboard } {
   const t = T[lang];
-  const text = [t.confirmTitle, '', itemsText(items, lang), '', ...totalLines(items, lang), '', draftText(d, lang)].join('\n');
+  const head = notice ? [notice, ''] : [];
+  const text = [...head, t.confirmTitle, '', itemsText(items, lang), '', ...totalLines(items, lang), '', draftText(d, lang)].join('\n');
   return {
     text,
     keyboard: [[{ text: t.confirm, callback_data: 'ok' }], [{ text: t.cancel, callback_data: 'x' }]],
@@ -180,12 +210,15 @@ const STATUS_BUTTON: Record<Exclude<Status, 'new'>, string> = {
   cancelled: A.setCancelled,
 };
 
-export function adminOrderView(o: Order, statusNote?: string): { text: string; keyboard: InlineKeyboard } {
+/** Room for the item list on an order card: the whole card must stay one editable message. */
+const CARD_BUDGET = 3500;
+
+export function adminOrderView(o: Order, statusNote?: string): { text: string; keyboard: InlineKeyboard; truncated: boolean } {
   const who = [esc(o.customer_name), o.username ? `@${esc(o.username)}` : '', `<a href="tg://user?id=${o.chat_id}">profil</a>`]
     .filter(Boolean)
     .join(' · ');
   const lines = [
-    A.newOrder(o.id),
+    o.status === 'new' ? A.newOrder(o.id) : A.order(o.id),
     tashkentTime(o.created_at),
     '',
     `${A.customer}: ${who}`,
@@ -194,19 +227,41 @@ export function adminOrderView(o: Order, statusNote?: string): { text: string; k
     `Manzil: ${esc(o.address)}`,
   ];
   if (o.note) lines.push(`Izoh: ${esc(o.note)}`);
-  lines.push(`${A.lang}: ${o.lang === 'ru' ? 'rus' : 'oʻzbek'}`, '', `<b>${A.items}:</b>`, itemsText(o.items, 'uz'), '', ...totalLines(o.items, 'uz'));
-  lines.push('', `${A.status}: <b>${STATUS[o.status].uz}</b>${statusNote ? ` (${esc(statusNote)})` : ''}`);
-  lines.push('', A.replyHint);
+  const tail = [
+    '',
+    ...totalLines(o.items, 'uz'),
+    '',
+    `${A.status}: <b>${STATUS[o.status].uz}</b>${statusNote ? ` (${esc(statusNote)})` : ''}`,
+    '',
+    A.replyHint,
+  ];
+  lines.push(`${A.lang}: ${o.lang === 'ru' ? 'rus' : 'oʻzbek'}`, '', `<b>${A.items}:</b>`);
+  let used = visibleLength([...lines, ...tail].join('\n'));
+  let shown = 0;
+  for (const line of itemsText(o.items, 'uz').split('\n')) {
+    const cost = visibleLength(line) + 1;
+    if (used + cost > CARD_BUDGET) break;
+    lines.push(line);
+    used += cost;
+    shown++;
+  }
+  const truncated = shown < o.items.length;
+  if (truncated) lines.push(A.moreItems(o.items.length - shown, o.id));
+  lines.push(...tail);
   const next = NEXT_STATUS[o.status].map((s) => ({
     text: STATUS_BUTTON[s as Exclude<Status, 'new'>],
     callback_data: `ad:${o.id}:${s}`,
   }));
-  return { text: lines.join('\n'), keyboard: next.length ? [next] : [] };
+  return { text: lines.join('\n'), keyboard: next.length ? [next] : [], truncated };
 }
 
-/** Payment link with {order} and {amount} filled in; null when the template is unusable. */
+/**
+ * Payment link with {order} and {amount} filled in; null when the template is unusable
+ * or needs an amount the order does not have yet.
+ */
 export function paymentUrl(template: string | undefined, order: Order): string | null {
   if (!template) return null;
+  if (template.includes('{amount}') && order.total == null) return null;
   const url = template
     .replace(/\{order\}/g, encodeURIComponent(String(order.id)))
     .replace(/\{amount\}/g, order.total != null ? String(order.total) : '');

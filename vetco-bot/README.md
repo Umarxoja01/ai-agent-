@@ -65,9 +65,12 @@ curl -X POST -H "Authorization: Bearer <ADMIN_TOKEN>" https://vetco-bot.<subdoma
 ### 5. Operatorlar guruhi va ID'lar
 
 1. Telegram'da guruh oching, masalan "VETCO buyurtmalar", botni qoʻshing, VETCO menejerlarini qoʻshing.
-2. Guruhda `/id` yozing → `chat_id` (masalan `-1001234567890`).
-3. Har operator botga shaxsiy `/id` yozadi → `user_id`.
-4. `wrangler.jsonc` → `vars`:
+2. Guruh sozlamalari → "Yangi aʼzolar uchun chat tarixi" → **Koʻrinadi**. Bu guruhni darhol supergroup'ga aylantiradi
+   (ID `-100…` boʻladi). Aks holda Telegram buni keyinroq oʻzi qiladi va ID oʻzgaradi — bot yangi ID'ga oʻzi oʻtadi,
+   `/health` da `admin_chat_moved` chiqadi, lekin `ADMIN_CHAT_ID` ni baribir yangilash kerak boʻladi.
+3. Guruhda `/id` yozing → `chat_id` (masalan `-1001234567890`).
+4. Har operator botga shaxsiy `/id` yozadi → `user_id`.
+5. `wrangler.jsonc` → `vars`:
 
 | Oʻzgaruvchi | Misol | Izoh |
 |---|---|---|
@@ -79,10 +82,12 @@ curl -X POST -H "Authorization: Bearer <ADMIN_TOKEN>" https://vetco-bot.<subdoma
 | `CATALOG_CSV_URL` | `https://docs.google.com/.../pub?output=csv` | 6-qadam |
 | `PAYME_URL` / `CLICK_URL` | `https://...{order}...{amount}` | ixtiyoriy, faqat `https://` |
 
-5. `npm run deploy` qayta.
+6. `npm run deploy` qayta, keyin `/api/setup` ni yana chaqiring — u guruhni tekshiradi va operator buyruqlari menyusini qoʻyadi.
+7. BotFather → `/setjoingroups` → **Disable**: bot boshqa guruhlarga qoʻshilmasin.
 
 Operator guruhda **faqat** bot xabariga reply qilganda yoki `/buyruq` yozganda bot uni koʻradi (Telegram privacy mode) —
-bu yetarli. `/photo` ni bot bilan **shaxsiy chatda** yuboring.
+bu yetarli. `/photo` ni bot bilan **shaxsiy chatda** yuboring. Mijoz maʼlumotli buyruqlar (`/orders`, `/order`) faqat
+operatorlar guruhida yoki shaxsiy chatda ishlaydi.
 
 ### 6. Katalog Google Sheets'da
 
@@ -128,15 +133,18 @@ Tayyor rasmlar Umar kutubxonasida: `_LIBRARY/PRODUCTS/<id>/<id>_photo.jpg`.
 ## Operatorlar uchun
 
 - Yangi buyurtma kartasi tagidagi tugmalar holatni oʻzgartiradi; mijoz oʻz tilida xabar oladi.
-- Mijozga javob: kartaga yoki "💬 Mijoz xabari"ga **reply** qiling (matn, rasm, fayl, ovoz).
-- `/orders` — ochiq buyurtmalar, `/order 12` — kartani qayta chiqarish, `/stats` — statistika, `/sync` — katalog, `/help`.
+- Mijozga javob: kartaga yoki "💬 Mijoz xabari"ga **reply** qiling (matn, rasm, fayl, ovoz). `/` bilan boshlangan reply
+  mijozga ketmaydi — buyruq sifatida bajariladi.
+- Mijozga holat xabari yetmasa (botni bloklagan), guruhda kartaga javob sifatida ⚠️ ogohlantirish va telefon raqami chiqadi.
+- `/orders` — ochiq buyurtmalar, `/order 12` — kartani qayta chiqarish (juda uzun buyurtmaning toʻliq roʻyxati bilan),
+  `/stats` — statistika, `/sync` — katalog, `/help`.
 
 ## Jarvis / noutbuk
 
 ```bash
 curl -H "Authorization: Bearer <ADMIN_TOKEN>" "https://<worker>/api/orders?since_id=0&format=csv"   # yoki JSON
 curl -X POST -H "Authorization: Bearer <ADMIN_TOKEN>" https://<worker>/api/sync
-curl https://<worker>/health
+curl https://<worker>/health     # products, unsent_cards (0 boʻlishi kerak), catalog_synced_at, cron_at
 ```
 
 `since_id` — oxirgi olingan buyurtma raqami (inkremental olish uchun).
@@ -144,7 +152,7 @@ curl https://<worker>/health
 ## Ishlab chiqish
 
 ```bash
-npm test             # 45+ test: Workers runtime + D1 (miniflare), Telegram soxta
+npm test             # 71 test: Workers runtime + D1 (miniflare), Telegram soxta
 npm run typecheck
 npm run dev          # lokal; .dev.vars.example -> .dev.vars
 ```
@@ -162,8 +170,10 @@ Telegram lokal `localhost`ga yeta olmaydi — oqimni testlar tekshiradi (`test/b
 
 ## Cheklovlar va xarajat
 
-Cloudflare bepul tarifi (soʻnggi raqamlarni developers.cloudflare.com da tekshiring): Workers — kuniga 100 000 soʻrov;
-D1 — 5 GB, kuniga 5 mln qator oʻqish / 100 000 qator yozish. Bitta buyurtma ~20 ta yozuv — kuniga minglab buyurtmaga yetadi.
+Cloudflare bepul tarifi (soʻnggi raqamlarni developers.cloudflare.com da tekshiring): Workers — kuniga 100 000 soʻrov,
+bitta soʻrovga 10 ms CPU va 50 ta tashqi soʻrov; D1 — 5 GB, kuniga 5 mln qator oʻqish / 100 000 qator yozish.
+Bitta buyurtma ~20 ta yozuv — kuniga minglab buyurtmaga yetadi. Cron jadvallarni toʻliq oʻqimaydi (qisman indekslar).
+Katalog CSV 300 KB gacha (taxminan 300 preparat qisqa tavsif bilan) — 10 ms CPU ichida oʻqiladi.
 Domen ixtiyoriy (~$10/yil); `workers.dev` bepul.
 
 Shaxsiy maʼlumot (ism, telefon, manzil) faqat D1 va (yoqilsa) Google Sheets'da; `/api/orders` faqat `ADMIN_TOKEN` bilan.

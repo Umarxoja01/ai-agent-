@@ -26,14 +26,19 @@ export interface TgPhotoSize {
 export interface TgMessage {
   message_id: number;
   from?: TgUser;
+  /** Set when an anonymous group admin writes: the group itself is the sender. */
+  sender_chat?: TgChat;
   chat: TgChat;
   date: number;
+  media_group_id?: string;
   text?: string;
   caption?: string;
   photo?: TgPhotoSize[];
   document?: { file_id: string; mime_type?: string };
   contact?: { phone_number: string; first_name: string; user_id?: number };
   reply_to_message?: TgMessage;
+  /** Service message in a basic group that became a supergroup. */
+  migrate_to_chat_id?: number;
 }
 
 export interface TgCallbackQuery {
@@ -66,11 +71,17 @@ export interface ReplyKeyboard {
 
 export type ReplyMarkup = { inline_keyboard: InlineKeyboard } | ReplyKeyboard | { remove_keyboard: true };
 
+export interface TgErrorParameters {
+  migrate_to_chat_id?: number;
+  retry_after?: number;
+}
+
 export class TgError extends Error {
   constructor(
     readonly method: string,
     readonly code: number,
     readonly description: string,
+    readonly parameters: TgErrorParameters = {},
   ) {
     super(`Telegram ${method} failed: ${code} ${description}`);
   }
@@ -93,13 +104,15 @@ export async function tg<T = unknown>(env: Env, method: string, params: Record<s
   } catch (err) {
     throw new TgError(method, 0, err instanceof Error ? err.message : 'network error');
   }
-  let body: { ok?: boolean; result?: T; error_code?: number; description?: string } = {};
+  let body: { ok?: boolean; result?: T; error_code?: number; description?: string; parameters?: TgErrorParameters } = {};
   try {
     body = await res.json();
   } catch {
     // non-JSON body (proxy error page etc.)
   }
-  if (!body.ok) throw new TgError(method, body.error_code ?? res.status, body.description ?? res.statusText);
+  if (!body.ok) {
+    throw new TgError(method, body.error_code ?? res.status, body.description ?? res.statusText, body.parameters ?? {});
+  }
   return body.result as T;
 }
 
@@ -154,14 +167,17 @@ export async function sendMessage(
   });
 }
 
-/** Edits a text message in place; falls back to a new message when editing is impossible. */
+/**
+ * Edits a text message in place; falls back to a new message when editing is impossible.
+ * Returns the new message when one was sent, null when the old one was edited.
+ */
 export async function editOrSend(
   env: Env,
-  chatId: number,
+  chatId: number | string,
   message: TgMessage | undefined,
   text: string,
   markup?: { inline_keyboard: InlineKeyboard },
-): Promise<void> {
+): Promise<TgMessage | null> {
   if (message?.text !== undefined && visibleLength(text) <= TEXT_LIMIT) {
     try {
       await tg(env, 'editMessageText', {
@@ -172,13 +188,13 @@ export async function editOrSend(
         link_preview_options: { is_disabled: true },
         ...(markup ? { reply_markup: markup } : {}),
       });
-      return;
+      return null;
     } catch (err) {
-      if (err instanceof TgError && /message is not modified/i.test(err.description)) return;
+      if (err instanceof TgError && /message is not modified/i.test(err.description)) return null;
       // too old, deleted, or a photo message: send a fresh one below
     }
   }
-  await sendMessage(env, chatId, text, markup);
+  return sendMessage(env, chatId, text, markup);
 }
 
 export async function answerCallback(env: Env, id: string, text?: string, alert = false): Promise<void> {

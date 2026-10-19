@@ -1,4 +1,4 @@
-import { createScheduledController, createExecutionContext, env, waitOnExecutionContext } from 'cloudflare:test';
+import { createScheduledController, env } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import sampleCsv from '../catalog/vetco_katalog.csv?raw';
 import { parseCatalog, parseCsv } from '../src/catalog';
@@ -127,20 +127,20 @@ describe('catalog sync', () => {
     )
       .bind(old, old)
       .run();
-    const ctx = createExecutionContext();
-    await worker.scheduled(createScheduledController({ cron: CRON_SYNC }), env, ctx);
-    await waitOnExecutionContext(ctx);
+    // 03:00: both crons fire. The sync one only syncs, so the card is not sent twice.
+    await Promise.all([
+      worker.scheduled(createScheduledController({ cron: CRON_SYNC }), env),
+      worker.scheduled(createScheduledController({ cron: CRON_RETRY }), env),
+    ]);
     const active = await env.DB.prepare('SELECT id FROM products WHERE active = 1').all();
     expect(active.results).toEqual([{ id: 'kefen' }]);
     const order = await env.DB.prepare('SELECT admin_message_id FROM orders WHERE id = ?').bind(meta.last_row_id).first<{ admin_message_id: number | null }>();
     expect(order!.admin_message_id).not.toBeNull();
-    expect(net.of('sendMessage').some((c) => String(c.params.text).includes('Retry'))).toBe(true);
+    expect(net.of('sendMessage').filter((c) => String(c.params.text).includes('Retry'))).toHaveLength(1);
 
-    // The 15-minute cron does not touch the catalog.
+    // The 15-minute cron does not touch the catalog, and a sent card is not sent again.
     net.clear();
-    const ctx2 = createExecutionContext();
-    await worker.scheduled(createScheduledController({ cron: CRON_RETRY }), env, ctx2);
-    await waitOnExecutionContext(ctx2);
+    await worker.scheduled(createScheduledController({ cron: CRON_RETRY }), env);
     expect(net.calls).toHaveLength(0);
   });
 });
@@ -169,7 +169,10 @@ describe('orders API and setup', () => {
     expect(res.status).toBe(200);
     const hook = net.of('setWebhook')[0]!;
     expect(hook.params).toMatchObject({ url: 'https://bot.test/telegram', secret_token: 'test-secret-0123456789' });
-    expect(net.of('setMyCommands')).toHaveLength(2);
+    const scopes = net.of('setMyCommands').map((c) => `${c.params.scope?.type ?? 'default'}:${c.params.language_code ?? ''}`);
+    expect(scopes).toEqual(['all_private_chats:', 'all_private_chats:ru', 'default:', 'chat:']);
+    expect(net.of('setMyCommands')[2]!.params.commands).toEqual([]);
+    expect(net.of('getChat')[0]!.params.chat_id).toBe('-100777');
   });
 
   it('renders the public catalog page with escaped text and deep links', async () => {

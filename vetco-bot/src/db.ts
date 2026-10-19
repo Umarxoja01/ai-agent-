@@ -40,6 +40,8 @@ export interface Draft {
   region?: string;
   address?: string;
   note?: string;
+  /** Lines and prices of the summary the customer is looking at: "id:qty:price|..." */
+  quote?: string;
 }
 
 export interface Session {
@@ -48,6 +50,7 @@ export interface Session {
   step: string | null;
   cart: CartLine[];
   draft: Draft;
+  updated_at: string | null;
 }
 
 export interface OrderItem {
@@ -110,10 +113,10 @@ export async function markUpdate(db: D1Database, updateId: number): Promise<bool
 
 export async function getSession(db: D1Database, chatId: number): Promise<Session> {
   const row = await db
-    .prepare('SELECT chat_id, lang, step, cart, draft FROM sessions WHERE chat_id = ?')
+    .prepare('SELECT chat_id, lang, step, cart, draft, updated_at FROM sessions WHERE chat_id = ?')
     .bind(chatId)
-    .first<{ chat_id: number; lang: string | null; step: string | null; cart: string; draft: string }>();
-  if (!row) return { chat_id: chatId, lang: null, step: null, cart: [], draft: {} };
+    .first<{ chat_id: number; lang: string | null; step: string | null; cart: string; draft: string; updated_at: string }>();
+  if (!row) return { chat_id: chatId, lang: null, step: null, cart: [], draft: {}, updated_at: null };
   const cart = parseJson<CartLine[]>(row.cart, []);
   return {
     chat_id: row.chat_id,
@@ -121,6 +124,7 @@ export async function getSession(db: D1Database, chatId: number): Promise<Sessio
     step: row.step,
     cart: Array.isArray(cart) ? cart : [],
     draft: parseJson<Draft>(row.draft, {}),
+    updated_at: row.updated_at,
   };
 }
 
@@ -204,12 +208,26 @@ export interface NewOrder {
   total: number | null;
 }
 
+export interface OrderLimit {
+  sinceIso: string;
+  max: number;
+}
+
+export async function countOrdersSince(db: D1Database, chatId: number, sinceIso: string): Promise<number> {
+  const row = await db
+    .prepare('SELECT COUNT(*) AS n FROM orders WHERE chat_id = ? AND created_at > ?')
+    .bind(chatId, sinceIso)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
 /**
  * Creates the order and empties the cart in one transaction, but only while the
- * session is still waiting for confirmation. A second tap on "Confirm" finds the
- * step already cleared and creates nothing. Returns the new order id or null.
+ * session is still waiting for confirmation and the chat is under its daily order
+ * limit. A second tap on "Confirm" finds the step already cleared and creates
+ * nothing. Returns the new order id or null.
  */
-export async function createOrderFromSession(db: D1Database, o: NewOrder): Promise<number | null> {
+export async function createOrderFromSession(db: D1Database, o: NewOrder, limit: OrderLimit): Promise<number | null> {
   const now = nowIso();
   const [insert] = await db.batch([
     db
@@ -217,7 +235,8 @@ export async function createOrderFromSession(db: D1Database, o: NewOrder): Promi
         `INSERT INTO orders (chat_id, username, lang, customer_name, phone, region, address, note, items, total,
            status, created_at, updated_at)
          SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?
-         WHERE EXISTS (SELECT 1 FROM sessions WHERE chat_id = ? AND step = 'confirm')`,
+         WHERE EXISTS (SELECT 1 FROM sessions WHERE chat_id = ? AND step = 'confirm')
+           AND (SELECT COUNT(*) FROM orders WHERE chat_id = ? AND created_at > ?) < ?`,
       )
       .bind(
         o.chat_id,
@@ -233,10 +252,16 @@ export async function createOrderFromSession(db: D1Database, o: NewOrder): Promi
         now,
         now,
         o.chat_id,
+        o.chat_id,
+        limit.sinceIso,
+        limit.max,
       ),
     db
-      .prepare(`UPDATE sessions SET step = NULL, cart = '[]', updated_at = ? WHERE chat_id = ? AND step = 'confirm'`)
-      .bind(now, o.chat_id),
+      .prepare(
+        `UPDATE sessions SET step = NULL, cart = '[]', updated_at = ? WHERE chat_id = ? AND step = 'confirm'
+           AND (SELECT COUNT(*) FROM orders WHERE chat_id = ? AND created_at = ?) > 0`,
+      )
+      .bind(now, o.chat_id, o.chat_id, now),
     db
       .prepare(
         `INSERT INTO customers (chat_id, username, name, phone, region, address, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -307,26 +332,63 @@ export async function setAdminMessage(db: D1Database, orderId: number, messageId
   await db.prepare('UPDATE orders SET admin_message_id = ? WHERE id = ?').bind(messageId, orderId).run();
 }
 
-export async function addRelay(db: D1Database, adminMessageId: number, chatId: number, orderId: number | null): Promise<void> {
+export type RelayKind = 'in' | 'copy' | 'card';
+
+export interface RelayRow {
+  adminChatId: string;
+  adminMessageId: number;
+  chatId: number;
+  orderId: number | null;
+  kind: RelayKind;
+  mediaGroup?: string | null;
+}
+
+export async function addRelay(db: D1Database, r: RelayRow): Promise<void> {
   await db
-    .prepare('INSERT OR REPLACE INTO relay (admin_message_id, chat_id, order_id, created_at) VALUES (?, ?, ?, ?)')
-    .bind(adminMessageId, chatId, orderId, nowIso())
+    .prepare(
+      `INSERT OR REPLACE INTO relay (admin_chat_id, admin_message_id, chat_id, order_id, kind, media_group, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(r.adminChatId, r.adminMessageId, r.chatId, r.orderId, r.kind, r.mediaGroup ?? null, nowIso())
     .run();
 }
 
-export async function getRelay(db: D1Database, adminMessageId: number): Promise<{ chat_id: number; order_id: number | null } | null> {
+export async function getRelay(
+  db: D1Database,
+  adminChatId: string,
+  adminMessageId: number,
+): Promise<{ chat_id: number; order_id: number | null } | null> {
   return db
-    .prepare('SELECT chat_id, order_id FROM relay WHERE admin_message_id = ?')
-    .bind(adminMessageId)
+    .prepare('SELECT chat_id, order_id FROM relay WHERE admin_chat_id = ? AND admin_message_id = ?')
+    .bind(adminChatId, adminMessageId)
     .first<{ chat_id: number; order_id: number | null }>();
 }
 
-export async function countRecentRelays(db: D1Database, chatId: number, sinceIso: string): Promise<number> {
+/** Messages the customer sent to the operators (one per message, not per copied file). */
+export async function countInbound(db: D1Database, chatId: number, sinceIso: string): Promise<number> {
   const row = await db
-    .prepare('SELECT COUNT(*) AS n FROM relay WHERE chat_id = ? AND created_at > ?')
+    .prepare(`SELECT COUNT(*) AS n FROM relay WHERE chat_id = ? AND kind = 'in' AND created_at > ?`)
     .bind(chatId, sinceIso)
     .first<{ n: number }>();
   return row?.n ?? 0;
+}
+
+/** True when an album from this customer already got its header in the operators' chat. */
+export async function mediaGroupSeen(db: D1Database, chatId: number, mediaGroup: string): Promise<boolean> {
+  const row = await db
+    .prepare('SELECT 1 AS x FROM relay WHERE chat_id = ? AND media_group = ? LIMIT 1')
+    .bind(chatId, mediaGroup)
+    .first();
+  return !!row;
+}
+
+/** Housekeeping for the cron: duplicate-update guard and old reply links. */
+export async function pruneOld(db: D1Database): Promise<void> {
+  const day = 86400_000;
+  await db.batch([
+    db.prepare('DELETE FROM processed_updates WHERE created_at < ?').bind(new Date(Date.now() - 7 * day).toISOString()),
+    db.prepare('DELETE FROM relay WHERE created_at < ?').bind(new Date(Date.now() - 180 * day).toISOString()),
+  ]);
 }
 
 export async function getMeta(db: D1Database, key: string): Promise<string | null> {

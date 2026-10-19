@@ -10,10 +10,10 @@ const PAGE_TEXT = {
     title: 'VETCO — veterinariya preparatlari katalogi',
     lead: 'Chorva uchun veterinariya preparatlari. Narx va yetkazib berishni operator bilan kelishasiz.',
     order: 'Telegramda buyurtma berish',
-    orderOne: 'Buyurtma',
+    orderOne: 'Buyurtma berish',
     empty: 'Katalog hozircha boʻsh.',
     other: 'Русский',
-    note: 'Qoʻllashdan oldin yoʻriqnomani oʻqing va veterinar bilan maslahatlashing. Dozani veterinar belgilaydi.',
+    note: 'Qoʻllashdan oldin yoʻriqnomani oʻqing va veterinar bilan maslahatlashing. Dozani veterinar belgilaydi. Goʻsht va sut uchun kutish muddatiga rioya qiling.',
     phone: 'Telefon',
   },
   ru: {
@@ -23,7 +23,7 @@ const PAGE_TEXT = {
     orderOne: 'Заказать',
     empty: 'Каталог пока пуст.',
     other: 'Oʻzbekcha',
-    note: 'Перед применением прочитайте инструкцию и проконсультируйтесь с ветеринаром. Дозировку определяет ветеринар.',
+    note: 'Перед применением прочитайте инструкцию и проконсультируйтесь с ветеринаром. Дозировку определяет ветеринар. Соблюдайте срок ожидания для мяса и молока.',
     phone: 'Телефон',
   },
 } satisfies Record<Lang, Record<string, string>>;

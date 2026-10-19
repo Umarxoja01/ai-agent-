@@ -2,45 +2,64 @@ import type { Env } from './env';
 import { setMeta } from './db';
 import { ID_RE, nowIso } from './util';
 
-/** RFC 4180 CSV: quoted fields, "" escapes, newlines inside quotes, CRLF, BOM. */
+const DELIMITER = /[,\r\n]/g;
+
+/** Index of the next comma or line break at or after `from`. */
+function nextDelimiter(s: string, from: number): number {
+  DELIMITER.lastIndex = from;
+  const m = DELIMITER.exec(s);
+  return m ? m.index : s.length;
+}
+
+/**
+ * RFC 4180 CSV: quoted fields, "" escapes, newlines inside quotes, CRLF, BOM.
+ * Copies whole runs with slice(): the free plan gives a request 10 ms of CPU.
+ */
 export function parseCsv(text: string): string[][] {
+  const s = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
   const rows: string[][] = [];
   let row: string[] = [];
-  let field = '';
-  let quoted = false;
-  const s = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i]!;
-    if (quoted) {
-      if (c === '"') {
-        if (s[i + 1] === '"') {
-          field += '"';
-          i++;
-        } else {
-          quoted = false;
+  let i = 0;
+  while (i < s.length) {
+    let field = '';
+    if (s[i] === '"') {
+      let j = i + 1;
+      for (;;) {
+        const q = s.indexOf('"', j);
+        if (q < 0) {
+          field += s.slice(j);
+          j = s.length;
+          break;
         }
-      } else {
-        field += c;
+        field += s.slice(j, q);
+        if (s[q + 1] === '"') {
+          field += '"';
+          j = q + 2;
+        } else {
+          j = q + 1;
+          break;
+        }
       }
-    } else if (c === '"') {
-      quoted = true;
-    } else if (c === ',') {
-      row.push(field);
-      field = '';
-    } else if (c === '\n' || c === '\r') {
-      if (c === '\r' && s[i + 1] === '\n') i++;
-      row.push(field);
-      rows.push(row);
-      row = [];
-      field = '';
+      const end = nextDelimiter(s, j);
+      field += s.slice(j, end);
+      i = end;
     } else {
-      field += c;
+      const end = nextDelimiter(s, i);
+      field = s.slice(i, end);
+      i = end;
     }
-  }
-  if (field !== '' || row.length) {
     row.push(field);
+    if (i >= s.length) break;
+    if (s[i] === ',') {
+      i++;
+      if (i === s.length) row.push('');
+      continue;
+    }
+    i += s[i] === '\r' && s[i + 1] === '\n' ? 2 : 1;
     rows.push(row);
+    row = [];
   }
+  if (row.length) rows.push(row);
   return rows.filter((r) => r.some((f) => f.trim() !== ''));
 }
 
@@ -274,7 +293,8 @@ export async function syncCatalog(env: Env): Promise<SyncReport> {
   } catch (err) {
     return { ok: false, total: 0, active: 0, errors: [`CSV yuklanmadi: ${err instanceof Error ? err.message : err}`] };
   }
-  if (csv.length > 1_000_000) return { ok: false, total: 0, active: 0, errors: ['CSV 1 MB dan katta'] };
+  // Keeps parsing within the free plan's CPU time and the json_each payload well under D1's value limit.
+  if (csv.length > 300_000) return { ok: false, total: 0, active: 0, errors: ['CSV 300 KB dan katta — tavsiflarni qisqartiring'] };
   if (/^\s*<(!doctype|html)/i.test(csv)) {
     return { ok: false, total: 0, active: 0, errors: ['CSV oʻrniga HTML keldi — jadval "Publish to web → CSV" qilinganmi?'] };
   }

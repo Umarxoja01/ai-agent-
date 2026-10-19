@@ -282,14 +282,17 @@ describe('operators', () => {
   });
 
   it('moves the order through its statuses and tells the customer', async () => {
+    await env.DB.prepare("UPDATE products SET price = 50000 WHERE id IN ('bistrepen', 'kefen')").run();
     const chat = 2402;
     const id = await placedOrder(chat);
+    await env.DB.prepare("UPDATE products SET price = NULL WHERE id IN ('bistrepen', 'kefen')").run();
     net.clear();
     await deliver(callbackUpdate(ADMIN_CHAT, `ad:${id}:confirmed`, 777));
     expect((await getOrder(env.DB, id))!.status).toBe('confirmed');
     const notice = net.lastTo(chat)!;
     expect(notice.params.text).toContain('Tasdiqlandi');
-    expect(buttons(notice)).toEqual([`https://payme.test/pay?order=${id}&amount=`]);
+    expect(notice.params.text).toContain('150\u00a0000 soʻm');
+    expect(buttons(notice)).toEqual([`https://payme.test/pay?order=${id}&amount=150000`]);
     expect(buttons(net.of('editMessageText').at(-1))).toEqual([`ad:${id}:shipped`, `ad:${id}:cancelled`]);
 
     await deliver(callbackUpdate(ADMIN_CHAT, `ad:${id}:delivered`, 777)); // skips "shipped"

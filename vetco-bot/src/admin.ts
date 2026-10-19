@@ -2,15 +2,83 @@ import type { Env } from './env';
 import * as db from './db';
 import { syncCatalog } from './catalog';
 import { A, STATUS, T, type Status } from './i18n';
-import { NEXT_STATUS, adminOrderView, money, paymentKeyboard, tashkentTime } from './render';
+import { NEXT_STATUS, adminOrderView, itemsText, money, paymentKeyboard, tashkentTime } from './render';
 import { pushOrder } from './sheets';
-import { TgError, editOrSend, inline, sendMessage, tg, type TgCallbackQuery, type TgMessage } from './tg';
+import {
+  TgError,
+  editOrSend,
+  inline,
+  sendMessage,
+  tg,
+  type InlineKeyboard,
+  type TgCallbackQuery,
+  type TgMessage,
+} from './tg';
 import { esc, groupDigits, ID_RE, nowIso, parseIdList } from './util';
 
 export const ADMIN_COMMANDS = new Set(['orders', 'order', 'stats', 'sync', 'photo', 'help']);
 
+/** Key in the meta table holding the operators' chat id after Telegram moved the group. */
+export const ADMIN_CHAT_OVERRIDE = 'admin_chat_id';
+
 export function adminChatId(env: Env): string {
   return (env.ADMIN_CHAT_ID ?? '').trim();
+}
+
+/**
+ * A per-request copy of env with any stored chat move applied: when a basic group becomes
+ * a supergroup it gets a new id, and the bot follows it until ADMIN_CHAT_ID is updated by
+ * hand. Always a copy, because followChatMove() changes it during the request.
+ */
+export async function withAdminChatOverride(env: Env): Promise<Env> {
+  const moved = await db.getMeta(env.DB, ADMIN_CHAT_OVERRIDE);
+  const follow = moved && moved.startsWith(`${adminChatId(env)}>`);
+  return { ...env, ...(follow ? { ADMIN_CHAT_ID: moved.split('>')[1]! } : {}) };
+}
+
+/** Records that the operators' group moved to a new id (env must be the per-request copy). */
+export async function followChatMove(env: Env, newChatId: number): Promise<void> {
+  const original = (await db.getMeta(env.DB, ADMIN_CHAT_OVERRIDE))?.split('>')[0] ?? adminChatId(env);
+  await db.setMeta(env.DB, ADMIN_CHAT_OVERRIDE, `${original}>${newChatId}`);
+  console.error(`operators' chat moved to ${newChatId}: update ADMIN_CHAT_ID in wrangler.jsonc`);
+  env.ADMIN_CHAT_ID = String(newChatId);
+}
+
+/** Runs a send to the operators' chat, following a group -> supergroup move once. */
+async function toOperators<T>(env: Env, send: (chatId: string) => Promise<T>): Promise<T> {
+  try {
+    return await send(adminChatId(env));
+  } catch (err) {
+    const moved = err instanceof TgError ? err.parameters.migrate_to_chat_id : undefined;
+    if (!moved) throw err;
+    await followChatMove(env, moved);
+    return send(adminChatId(env));
+  }
+}
+
+/** Sends a message to the operators' chat and links it to the customer for replies. */
+export async function postToOperators(
+  env: Env,
+  text: string,
+  link: Omit<db.RelayRow, 'adminChatId' | 'adminMessageId'>,
+  keyboard?: InlineKeyboard,
+): Promise<TgMessage> {
+  const sent = await toOperators(env, (chat) => sendMessage(env, chat, text, keyboard?.length ? inline(keyboard) : undefined));
+  await db.addRelay(env.DB, { ...link, adminChatId: adminChatId(env), adminMessageId: sent.message_id });
+  return sent;
+}
+
+/** Copies a customer's photo, file or voice note into the operators' chat. */
+export async function copyToOperators(
+  env: Env,
+  fromChatId: number,
+  messageId: number,
+  link: Omit<db.RelayRow, 'adminChatId' | 'adminMessageId'>,
+): Promise<void> {
+  const copy = await toOperators(env, (chat) =>
+    tg<{ message_id: number }>(env, 'copyMessage', { chat_id: chat, from_chat_id: fromChatId, message_id: messageId }),
+  );
+  await db.addRelay(env.DB, { ...link, adminChatId: adminChatId(env), adminMessageId: copy.message_id });
 }
 
 /** Staff: anyone in the operators' chat, or a user listed in ADMIN_USER_IDS. */
@@ -30,15 +98,13 @@ export function parseCommand(text: string): Command | null {
 
 /** Posts the order card to the operators' chat and remembers it for replies and retries. */
 export async function notifyNewOrder(env: Env, order: db.Order): Promise<void> {
-  const chat = adminChatId(env);
-  if (!chat) {
+  if (!adminChatId(env)) {
     console.error(`order #${order.id}: ADMIN_CHAT_ID is not set`);
     return;
   }
   const view = adminOrderView(order);
-  const sent = await sendMessage(env, chat, view.text, inline(view.keyboard));
+  const sent = await postToOperators(env, view.text, { chatId: order.chat_id, orderId: order.id, kind: 'card' }, view.keyboard);
   await db.setAdminMessage(env.DB, order.id, sent.message_id);
-  await db.addRelay(env.DB, sent.message_id, order.chat_id, order.id);
 }
 
 export async function adminCommand(env: Env, msg: TgMessage, cmd: Command): Promise<void> {
@@ -49,7 +115,7 @@ export async function adminCommand(env: Env, msg: TgMessage, cmd: Command): Prom
       return;
     case 'sync': {
       const report = await syncCatalog(env);
-      const lines = [report.ok ? A.syncOk(report.active, report.total) : A.syncFailed(report.errors[0] ?? '')];
+      const lines = [report.ok ? A.syncOk(report.active, report.total) : A.syncFailed(esc(report.errors[0] ?? ''))];
       const rest = report.ok ? report.errors : report.errors.slice(1);
       if (rest.length) lines.push('', A.syncErrors(rest.length), ...rest.slice(0, 20).map((e) => `• ${esc(e)}`));
       await sendMessage(env, chatId, lines.join('\n'));
@@ -79,7 +145,17 @@ export async function adminCommand(env: Env, msg: TgMessage, cmd: Command): Prom
       }
       const view = adminOrderView(order);
       const sent = await sendMessage(env, chatId, view.text, inline(view.keyboard));
-      if (String(chatId) === adminChatId(env)) await db.addRelay(env.DB, sent.message_id, order.chat_id, order.id);
+      if (String(chatId) === adminChatId(env)) {
+        await db.addRelay(env.DB, {
+          adminChatId: adminChatId(env),
+          adminMessageId: sent.message_id,
+          chatId: order.chat_id,
+          orderId: order.id,
+          kind: 'card',
+        });
+      }
+      // The card shortens very long orders; here is the complete list.
+      if (view.truncated) await sendMessage(env, chatId, `<b>#${order.id} — ${A.items}:</b>\n${itemsText(order.items, 'uz')}`);
       return;
     }
     case 'orders': {
@@ -92,7 +168,7 @@ export async function adminCommand(env: Env, msg: TgMessage, cmd: Command): Prom
         const sum = o.total != null ? ` · ${groupDigits(o.total)}` : '';
         return `#${o.id} · ${tashkentTime(o.created_at)} · ${esc(o.customer_name)} · ${esc(o.phone)}${sum}\n${STATUS[o.status].uz}`;
       });
-      await sendMessage(env, chatId, [A.ordersOpen, '', ...lines, '', 'Kartani ochish: /order 12'].join('\n'));
+      await sendMessage(env, chatId, [A.ordersOpen, '', ...lines, '', A.openCardHint].join('\n'));
       return;
     }
     case 'stats': {
@@ -103,9 +179,9 @@ export async function adminCommand(env: Env, msg: TgMessage, cmd: Command): Prom
         `SELECT
            SUM(created_at >= ?1) AS today,
            SUM(created_at >= ?2) AS week,
-           SUM(created_at >= ?3) AS month,
-           SUM(CASE WHEN created_at >= ?3 AND total IS NOT NULL THEN total ELSE 0 END) AS sum
-         FROM orders WHERE status != 'cancelled'`,
+           COUNT(*) AS month,
+           SUM(CASE WHEN total IS NOT NULL THEN total ELSE 0 END) AS sum
+         FROM orders WHERE status != 'cancelled' AND created_at >= ?3`,
       )
         .bind(startOfToday, since(7), since(30))
         .first<{ today: number | null; week: number | null; month: number | null; sum: number | null }>();
@@ -126,20 +202,16 @@ export async function adminStatusCallback(env: Env, cb: TgCallbackQuery, exec: E
   if (!NEXT_STATUS[order.status].includes(target) || !(await db.setOrderStatus(env.DB, order.id, order.status, target))) {
     // Someone else changed it first: show the current state.
     const fresh = (await db.getOrder(env.DB, order.id)) ?? order;
-    const view = adminOrderView(fresh);
-    if (cb.message) await editOrSend(env, chatId, cb.message, view.text, inline(view.keyboard));
+    await refreshCard(env, cb, fresh);
     return A.badTransition;
   }
   const updated = (await db.getOrder(env.DB, order.id))!;
-  const view = adminOrderView(updated, `${cb.from.first_name}, ${tashkentTime(nowIso())}`);
   exec.waitUntil(pushOrder(env, updated));
-  if (cb.message) {
-    try {
-      await editOrSend(env, chatId, cb.message, view.text, inline(view.keyboard));
-    } catch (err) {
-      // The status is saved; the customer must still hear about it.
-      console.warn(`order #${updated.id}: card refresh failed: ${err instanceof TgError ? err.description : err}`);
-    }
+  try {
+    await refreshCard(env, cb, updated, `${cb.from.first_name}, ${tashkentTime(nowIso())}`);
+  } catch (err) {
+    // The status is saved; the customer must still hear about it.
+    console.warn(`order #${updated.id}: card refresh failed: ${err instanceof TgError ? err.description : err}`);
   }
 
   const t = T[updated.lang];
@@ -148,12 +220,38 @@ export async function adminStatusCallback(env: Env, cb: TgCallbackQuery, exec: E
   if (keyboard.length) {
     text += `\n\n${t.payPrompt(updated.total != null ? money(updated.total, updated.lang) : null)}\n${t.receiptHint}`;
   }
+  if (target === 'cancelled') text += `\n\n${t.cancelledHint}`;
   try {
     await sendMessage(env, updated.chat_id, text, keyboard.length ? inline(keyboard) : undefined);
   } catch (err) {
-    return A.replyFailed(err instanceof TgError ? err.description : 'xato');
+    // A toast disappears in two seconds; leave a note every operator can see.
+    const why = err instanceof TgError ? err.description : 'xato';
+    if (cb.message) {
+      await sendMessage(env, chatId, A.customerUnreachable(updated.id, esc(why), esc(updated.phone)), undefined, {
+        reply_parameters: { message_id: cb.message.message_id, allow_sending_without_reply: true },
+      }).catch(() => undefined);
+    }
+    return A.replyFailed(why);
   }
   return A.saved;
+}
+
+/** Redraws an order card; when Telegram makes us post a new one, it becomes the order's card. */
+async function refreshCard(env: Env, cb: TgCallbackQuery, order: db.Order, note?: string): Promise<void> {
+  if (!cb.message) return;
+  const view = adminOrderView(order, note);
+  const chatId = cb.message.chat.id;
+  const sent = await editOrSend(env, chatId, cb.message, view.text, inline(view.keyboard));
+  if (sent && String(chatId) === adminChatId(env)) {
+    await db.setAdminMessage(env.DB, order.id, sent.message_id);
+    await db.addRelay(env.DB, {
+      adminChatId: adminChatId(env),
+      adminMessageId: sent.message_id,
+      chatId: order.chat_id,
+      orderId: order.id,
+      kind: 'card',
+    });
+  }
 }
 
 /** Delivers an operator's reply (text, photo, file, voice...) to the customer. */

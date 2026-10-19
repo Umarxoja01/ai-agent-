@@ -13,7 +13,6 @@ export const REGIONS: { key: string; uz: string; ru: string }[] = [
   { key: 'bux', uz: 'Buxoro viloyati', ru: 'Бухарская обл.' },
   { key: 'fer', uz: 'Fargʻona viloyati', ru: 'Ферганская обл.' },
   { key: 'jiz', uz: 'Jizzax viloyati', ru: 'Джизакская обл.' },
-  { key: 'xor', uz: 'Xorazm viloyati', ru: 'Хорезмская обл.' },
   { key: 'nam', uz: 'Namangan viloyati', ru: 'Наманганская обл.' },
   { key: 'nav', uz: 'Navoiy viloyati', ru: 'Навоийская обл.' },
   { key: 'qash', uz: 'Qashqadaryo viloyati', ru: 'Кашкадарьинская обл.' },
@@ -21,6 +20,7 @@ export const REGIONS: { key: string; uz: string; ru: string }[] = [
   { key: 'sam', uz: 'Samarqand viloyati', ru: 'Самаркандская обл.' },
   { key: 'sir', uz: 'Sirdaryo viloyati', ru: 'Сырдарьинская обл.' },
   { key: 'sur', uz: 'Surxondaryo viloyati', ru: 'Сурхандарьинская обл.' },
+  { key: 'xor', uz: 'Xorazm viloyati', ru: 'Хорезмская обл.' },
 ];
 
 export function regionName(key: string, lang: Lang): string {
@@ -69,20 +69,22 @@ const uz = {
   back: '⬅️ Orqaga',
   toCatalog: '🛒 Katalog',
   maker: 'Ishlab chiqaruvchi',
-  form: 'Shakli',
+  form: 'Chiqarilish shakli',
   ingredient: 'Taʼsir etuvchi modda',
   price: 'Narxi',
   priceOnRequest: 'operator aytadi',
   inStock: '✅ Omborda bor',
   outOfStock: '⏳ Hozir omborda yoʻq — buyurtma qabul qilinadi, muddatini operator aytadi',
   dose: 'Dozasi',
-  vetNote: '⚠️ Qoʻllashdan oldin yoʻriqnomani oʻqing va veterinar bilan maslahatlashing.',
-  alternative: 'Muqobili',
-  howMany: (unit: string) => `Nechta ${unit} kerak?`,
+  vetNote:
+    '⚠️ Qoʻllashdan oldin yoʻriqnomani oʻqing va veterinar bilan maslahatlashing. Goʻsht va sut uchun kutish muddatiga rioya qiling.',
+  alternative: (n: number): string => (n > 1 ? 'Muqobillari' : 'Muqobili'),
+  howMany: (unit: string) => `Nechta ${unit} kerak? Tugmani bosing yoki sonini yozing:`,
   otherQty: '✍️ Boshqa son',
   askQty: 'Sonini raqam bilan yozing (masalan: 15):',
-  badQty: (max: number) => `Iltimos, 1 dan ${max} gacha butun son yozing.`,
-  added: (name: string, qty: number) => `✅ Savatga qoʻshildi: <b>${name}</b> × ${qty}`,
+  badQty: (max: number) => `Faqat sonni yozing (1 dan ${max} gacha), masalan: 15`,
+  added: (name: string, qty: number, total: number) =>
+    `✅ Savatga qoʻshildi: <b>${name}</b> × ${qty}` + (total !== qty ? `\nSavatda jami: ${total}` : ''),
   goToCart: '🧺 Savatga oʻtish',
   continueShopping: '🛒 Yana tanlash',
   cartEmpty: 'Savatingiz boʻsh. Katalogdan preparat tanlang 🛒',
@@ -119,20 +121,29 @@ const uz = {
   orderPlaced: (id: number) =>
     `✅ Buyurtmangiz qabul qilindi! Raqami: <b>#${id}</b>\n\n` +
     'Operator narx, yetkazib berish va toʻlovni kelishish uchun tez orada siz bilan bogʻlanadi.',
-  checkoutCancelled: 'Buyurtma bekor qilindi. Savat saqlanib qoldi.',
+  checkoutCancelled: 'Buyurtma berish toʻxtatildi. Savatingiz saqlanib qoldi.',
+  quoteChanged: 'Narx yoki savat oʻzgardi — iltimos, qayta tekshiring.',
+  useButtons: 'Davom etish uchun quyidagi tugmalardan birini bosing 👇',
+  useMenu: 'Kerakli boʻlimni pastdagi menyudan tanlang 👇',
   staleButton: 'Bu tugma eskirgan. Menyudan qaytadan boshlang.',
   ordersEmpty: 'Sizda hali buyurtma yoʻq.',
   ordersTitle: '📦 <b>Soʻnggi buyurtmalaringiz</b>',
   statusChanged: (id: number, status: string) => `Buyurtma <b>#${id}</b>: ${status}`,
   payPrompt: (amount: string | null) =>
-    amount ? `Toʻlov summasi: <b>${amount}</b>. Toʻlov usulini tanlang:` : 'Toʻlov usulini tanlang:',
+    amount ? `Toʻlov summasi: <b>${amount}</b>. Toʻlov usulini tanlang:` : 'Summani operator aytadi. Toʻlov usulini tanlang:',
+  cancelledHint: 'Savolingiz boʻlsa, shu chatga yozing — operator javob beradi.',
   receiptHint: 'Toʻlovdan keyin chek rasmini shu chatga yuboring.',
   contactTitle: '📞 <b>Aloqa</b>',
   phone: 'Telefon',
   contactFallback: 'Savolingizni shu yerga yozing — operator javob beradi.',
   questionForwarded: 'Xabaringiz operatorga yuborildi. Tez orada javob beramiz.',
-  receiptForwarded: (id: number) => `Rasm operatorga yuborildi (buyurtma #${id}). Rahmat!`,
-  tooManyMessages: 'Bugun juda koʻp xabar yuborildi. Iltimos, operatorga telefon qiling.',
+  receiptForwarded: (id: number) => `Rasm yoki fayl operatorga yuborildi (buyurtma #${id}). Rahmat!`,
+  tooManyMessages: (phone: string | null) =>
+    'Soʻnggi 24 soatda juda koʻp xabar yuborildi. ' +
+    (phone ? `Iltimos, operatorga qoʻngʻiroq qiling: ${phone}` : 'Iltimos, ertaga yozing.'),
+  tooManyOrders: (phone: string | null) =>
+    'Soʻnggi 24 soatda juda koʻp buyurtma berildi. ' +
+    (phone ? `Yangi buyurtma uchun operatorga qoʻngʻiroq qiling: ${phone}` : 'Iltimos, ertaga urinib koʻring.'),
   operatorSays: '💬 <b>Operator:</b>',
   productMissing: 'Bu preparat topilmadi yoki hozir sotuvda yoʻq.',
   tooLong: (n: number) => `Matn juda uzun (koʻpi bilan ${n} belgi).`,
@@ -153,20 +164,22 @@ const ru: typeof uz = {
   back: '⬅️ Назад',
   toCatalog: '🛒 Каталог',
   maker: 'Производитель',
-  form: 'Форма',
+  form: 'Форма выпуска',
   ingredient: 'Действующее вещество',
   price: 'Цена',
   priceOnRequest: 'уточнит оператор',
   inStock: '✅ В наличии',
   outOfStock: '⏳ Сейчас нет на складе — заказ принимаем, срок уточнит оператор',
   dose: 'Дозировка',
-  vetNote: '⚠️ Перед применением прочитайте инструкцию и проконсультируйтесь с ветеринаром.',
-  alternative: 'Аналог',
-  howMany: (unit: string) => `Укажите количество (ед.: ${unit}):`,
+  vetNote:
+    '⚠️ Перед применением прочитайте инструкцию и проконсультируйтесь с ветеринаром. Соблюдайте срок ожидания для мяса и молока.',
+  alternative: (n: number) => (n > 1 ? 'Аналоги' : 'Аналог'),
+  howMany: (unit: string) => `Сколько нужно? Единица: ${unit}. Нажмите кнопку или напишите число:`,
   otherQty: '✍️ Другое количество',
-  askQty: 'Введите количество цифрой (например: 15):',
-  badQty: (max: number) => `Пожалуйста, введите целое число от 1 до ${max}.`,
-  added: (name: string, qty: number) => `✅ Добавлено в корзину: <b>${name}</b> × ${qty}`,
+  askQty: 'Введите количество цифрами (например: 15):',
+  badQty: (max: number) => `Напишите только число от 1 до ${max}, например: 15`,
+  added: (name: string, qty: number, total: number) =>
+    `✅ Добавлено в корзину: <b>${name}</b> × ${qty}` + (total !== qty ? `\nВсего в корзине: ${total}` : ''),
   goToCart: '🧺 Перейти в корзину',
   continueShopping: '🛒 Выбрать ещё',
   cartEmpty: 'Корзина пуста. Выберите препарат в каталоге 🛒',
@@ -204,19 +217,28 @@ const ru: typeof uz = {
     `✅ Заказ принят! Номер: <b>#${id}</b>\n\n` +
     'Оператор скоро свяжется с вами, чтобы согласовать цену, доставку и оплату.',
   checkoutCancelled: 'Оформление отменено. Корзина сохранена.',
+  quoteChanged: 'Цена или состав корзины изменились — пожалуйста, проверьте ещё раз.',
+  useButtons: 'Чтобы продолжить, нажмите одну из кнопок ниже 👇',
+  useMenu: 'Выберите нужный раздел в меню ниже 👇',
   staleButton: 'Эта кнопка устарела. Начните заново из меню.',
   ordersEmpty: 'У вас пока нет заказов.',
   ordersTitle: '📦 <b>Ваши последние заказы</b>',
   statusChanged: (id: number, status: string) => `Заказ <b>#${id}</b>: ${status}`,
   payPrompt: (amount: string | null) =>
-    amount ? `Сумма к оплате: <b>${amount}</b>. Выберите способ оплаты:` : 'Выберите способ оплаты:',
+    amount ? `Сумма к оплате: <b>${amount}</b>. Выберите способ оплаты:` : 'Сумму сообщит оператор. Выберите способ оплаты:',
+  cancelledHint: 'Если есть вопросы, напишите в этот чат — оператор ответит.',
   receiptHint: 'После оплаты отправьте фото чека в этот чат.',
   contactTitle: '📞 <b>Контакты</b>',
   phone: 'Телефон',
   contactFallback: 'Напишите вопрос сюда — оператор ответит.',
   questionForwarded: 'Сообщение передано оператору. Скоро ответим.',
-  receiptForwarded: (id: number) => `Фото передано оператору (заказ #${id}). Спасибо!`,
-  tooManyMessages: 'Сегодня отправлено слишком много сообщений. Пожалуйста, позвоните оператору.',
+  receiptForwarded: (id: number) => `Фото или файл переданы оператору (заказ #${id}). Спасибо!`,
+  tooManyMessages: (phone: string | null) =>
+    'За последние 24 часа отправлено слишком много сообщений. ' +
+    (phone ? `Пожалуйста, позвоните оператору: ${phone}` : 'Пожалуйста, напишите завтра.'),
+  tooManyOrders: (phone: string | null) =>
+    'За последние 24 часа оформлено слишком много заказов. ' +
+    (phone ? `Для нового заказа позвоните оператору: ${phone}` : 'Пожалуйста, попробуйте завтра.'),
   operatorSays: '💬 <b>Оператор:</b>',
   productMissing: 'Препарат не найден или сейчас не продаётся.',
   tooLong: (n: number) => `Текст слишком длинный (максимум ${n} символов).`,
@@ -230,6 +252,11 @@ export const T: Record<Lang, typeof uz> = { uz, ru };
 /** Texts for the operators' chat (Uzbek only). */
 export const A = {
   newOrder: (id: number) => `🆕 <b>Yangi buyurtma #${id}</b>`,
+  order: (id: number) => `📦 <b>Buyurtma #${id}</b>`,
+  moreItems: (n: number, id: number) => `… yana ${n} ta preparat — toʻliq roʻyxat: /order ${id}`,
+  openCardHint: 'Kartani ochish: /order 12',
+  customerUnreachable: (id: number, why: string, phone: string) =>
+    `⚠️ #${id}: mijozga xabar yetmadi (${why}). Telefon qiling: ${phone}`,
   customer: 'Mijoz',
   lang: 'Til',
   items: 'Preparatlar',
@@ -262,6 +289,7 @@ export const A = {
   help:
     '<b>Operator buyruqlari</b>\n' +
     '/orders — ochiq buyurtmalar\n' +
+    '/order 12 — buyurtma kartasi va toʻliq roʻyxati\n' +
     '/stats — statistika\n' +
     '/sync — katalogni Google Sheets dan yangilash\n' +
     '/photo id — rasm izohida: mahsulot rasmini saqlash\n' +

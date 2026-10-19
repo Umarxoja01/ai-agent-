@@ -20,6 +20,8 @@ export function sheetRow(o: Order): Record<string, string | number> {
     telegram: o.username ? `@${o.username}` : '',
     chat_id: o.chat_id,
     updated: tashkentTime(o.updated_at),
+    // Pushes can arrive out of order; the Apps Script keeps the row with the newest version.
+    version: o.updated_at,
   };
 }
 

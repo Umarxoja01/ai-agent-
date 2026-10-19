@@ -75,21 +75,31 @@ CREATE TABLE orders (
 );
 CREATE INDEX orders_chat ON orders (chat_id, id);
 CREATE INDEX orders_status ON orders (status, id);
+-- The 15-minute cron looks only for these rows; without partial indexes it would scan the table.
+CREATE INDEX orders_unnotified ON orders (id) WHERE admin_message_id IS NULL;
+CREATE INDEX orders_unsynced ON orders (id) WHERE sheets_synced = 0;
 
--- Admin-chat message -> customer chat, so an operator's reply reaches the customer.
+-- Operators' chat message -> customer chat, so an operator's reply reaches the customer.
+-- Message ids are unique only inside one chat, hence the chat id in the key.
 CREATE TABLE relay (
-  admin_message_id INTEGER PRIMARY KEY,
+  admin_chat_id    TEXT NOT NULL,
+  admin_message_id INTEGER NOT NULL,
   chat_id          INTEGER NOT NULL,
   order_id         INTEGER,
-  created_at       TEXT NOT NULL
+  kind             TEXT NOT NULL,                -- in: customer message header, copy: copied media, card: order card
+  media_group      TEXT,
+  created_at       TEXT NOT NULL,
+  PRIMARY KEY (admin_chat_id, admin_message_id)
 );
-CREATE INDEX relay_chat ON relay (chat_id, created_at);
+CREATE INDEX relay_chat ON relay (chat_id, kind, created_at);
+CREATE INDEX relay_created ON relay (created_at);
 
 -- Telegram may deliver an update twice; the first insert wins.
 CREATE TABLE processed_updates (
   update_id  INTEGER PRIMARY KEY,
   created_at TEXT NOT NULL
 );
+CREATE INDEX processed_updates_created ON processed_updates (created_at);
 
 CREATE TABLE meta (
   key   TEXT PRIMARY KEY,

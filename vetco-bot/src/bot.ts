@@ -5,9 +5,12 @@ import {
   adminChatId,
   adminCommand,
   adminStatusCallback,
+  copyToOperators,
+  followChatMove,
   isStaff,
   notifyNewOrder,
   parseCommand,
+  postToOperators,
   relayToCustomer,
 } from './admin';
 import { A, REGIONS, T, isLang, menuKeyOf, regionName, type Lang } from './i18n';
@@ -22,6 +25,7 @@ import {
   phoneKeyboard,
   productCard,
   productName,
+  quoteOf,
   totals,
   type PricedLine,
 } from './render';
@@ -45,7 +49,21 @@ import { cleanText, esc, ID_RE, normalizePhone } from './util';
 export const MAX_QTY = 9999;
 export const MAX_CART_LINES = 30;
 const LIMITS = { name: 80, address: 300, note: 500, question: 2000 };
+/** Customer messages forwarded to the operators per rolling 24 hours. */
 const MESSAGES_PER_DAY = 30;
+/** Orders per chat per rolling 24 hours: stops a script from flooding the operators. */
+export const ORDERS_PER_DAY = 5;
+/** A checkout left this long is forgotten, so later receipts and questions reach the operators. */
+const STEP_TTL_MS = 30 * 60_000;
+const CHECKOUT_STEPS = new Set(['name', 'phone', 'region', 'address', 'note', 'saved', 'confirm']);
+/** "15", "15 ta", "15 шт", "15 флаконов" */
+const QTY_RE = /^\s*(\d{1,5})\s*(?:ta|dona|flakon|fl\.?|шт\.?|штук[аи]?|флакон(?:а|ов)?|фл\.?)?\s*$/iu;
+
+export function parseQty(text: string): number | null {
+  const m = QTY_RE.exec(text);
+  const qty = m ? Number(m[1]) : NaN;
+  return Number.isInteger(qty) && qty >= 1 && qty <= MAX_QTY ? qty : null;
+}
 
 interface Ctx {
   env: Env;
@@ -56,9 +74,8 @@ interface Ctx {
   lang: Lang;
 }
 
+/** Handles an update whose id is already recorded as processed (see index.ts). */
 export async function handleUpdate(env: Env, update: TgUpdate, exec: ExecutionContext): Promise<void> {
-  if (!Number.isSafeInteger(update.update_id)) return;
-  if (!(await db.markUpdate(env.DB, update.update_id))) return;
   try {
     if (update.callback_query) return await handleCallback(env, update.callback_query, exec);
     if (update.message) return await handleMessage(env, update.message, exec);
@@ -76,26 +93,36 @@ export async function handleUpdate(env: Env, update: TgUpdate, exec: ExecutionCo
 // Messages
 
 async function handleMessage(env: Env, msg: TgMessage, exec: ExecutionContext): Promise<void> {
-  const user = msg.from;
-  if (!user || user.is_bot) return;
   const chatId = msg.chat.id;
-  const staff = isStaff(env, user.id, chatId);
+  const inAdminChat = adminChatId(env) !== '' && String(chatId) === adminChatId(env);
+
+  // The operators' basic group became a supergroup with a new id: follow it.
+  if (inAdminChat && msg.migrate_to_chat_id) {
+    await followChatMove(env, msg.migrate_to_chat_id);
+    return;
+  }
+  // An anonymous group admin writes as the group itself (from = @GroupAnonymousBot).
+  const anonymousStaff = inAdminChat && msg.sender_chat?.id === chatId;
+  const user = msg.from;
+  if (!user || (user.is_bot && !anonymousStaff)) return;
+  const staff = anonymousStaff || isStaff(env, user.id, chatId);
+  const cmd = parseCommand(msg.text ?? msg.caption ?? '');
 
   // An operator replying in the operators' chat to a forwarded message or an order card.
-  if (staff && String(chatId) === adminChatId(env) && msg.reply_to_message) {
-    const relay = await db.getRelay(env.DB, msg.reply_to_message.message_id);
+  if (staff && inAdminChat && msg.reply_to_message && !cmd) {
+    const relay = await db.getRelay(env.DB, adminChatId(env), msg.reply_to_message.message_id);
     if (relay) {
       await relayToCustomer(env, msg, relay.chat_id);
       return;
     }
   }
 
-  const cmd = parseCommand(msg.text ?? msg.caption ?? '');
   if (cmd?.name === 'id') {
     await sendMessage(env, chatId, `chat_id: <code>${chatId}</code>\nuser_id: <code>${user.id}</code>`);
     return;
   }
-  if (staff && cmd && ADMIN_COMMANDS.has(cmd.name)) {
+  // Order lists carry customers' phones: only in a private chat or the operators' chat.
+  if (staff && cmd && ADMIN_COMMANDS.has(cmd.name) && (msg.chat.type === 'private' || inAdminChat)) {
     await adminCommand(env, msg, cmd);
     return;
   }
@@ -104,6 +131,12 @@ async function handleMessage(env: Env, msg: TgMessage, exec: ExecutionContext): 
   const s = await db.getSession(env.DB, chatId);
   const ctx: Ctx = { env, exec, chatId, user, s, lang: s.lang ?? 'uz' };
   const text = msg.text ?? '';
+
+  // A checkout left half-way must not swallow later receipts and questions.
+  if (s.step && !s.step.startsWith('lang:') && s.updated_at && Date.now() - Date.parse(s.updated_at) > STEP_TTL_MS) {
+    s.step = null;
+    await save(ctx);
+  }
 
   if (cmd?.name === 'start') {
     const payload = /^p_[a-z0-9_-]{1,40}$/.test(cmd.arg) ? cmd.arg : '';
@@ -126,10 +159,7 @@ async function handleMessage(env: Env, msg: TgMessage, exec: ExecutionContext): 
 
   const route = (text && menuKeyOf(text)) || commandRoute(cmd?.name);
   if (route) {
-    if (s.step) {
-      s.step = null;
-      await save(ctx);
-    }
+    await leaveStep(ctx);
     switch (route) {
       case 'catalog':
         return showCategories(ctx);
@@ -148,21 +178,33 @@ async function handleMessage(env: Env, msg: TgMessage, exec: ExecutionContext): 
   }
 
   const step = s.step ?? '';
-  if (step.startsWith('qty:')) return onQuantity(ctx, step.slice(4), text);
+  // A contact from a leftover "share phone" button outside the phone step.
+  if (msg.contact && step !== 'phone') {
+    await sendMessage(env, chatId, T[ctx.lang].useMenu, mainMenu(ctx.lang));
+    return;
+  }
+  // Photos, files and voice notes always go to the operators (often a payment receipt).
+  if (msg.text === undefined && !msg.contact) return forwardToOperator(ctx, msg);
+
+  if (step.startsWith('qty:')) return onQuantity(ctx, msg, step.slice(4), false);
+  if (step.startsWith('qty?:')) return onQuantity(ctx, msg, step.slice(5), true);
   switch (step) {
     case 'name':
       return onName(ctx, msg);
     case 'phone':
       return onPhone(ctx, msg);
-    case 'region':
-      return askRegion(ctx);
     case 'address':
       return onAddress(ctx, msg);
     case 'note':
       return onNote(ctx, msg);
+    case 'region':
     case 'saved':
-      return askUseSaved(ctx);
     case 'confirm':
+      // These steps wait for a button. A question still reaches the operators.
+      if (text.includes('?')) await forwardToOperator(ctx, msg);
+      await sendMessage(env, chatId, T[ctx.lang].useButtons);
+      if (step === 'region') return askRegion(ctx);
+      if (step === 'saved') return askUseSaved(ctx);
       return showConfirm(ctx);
   }
   if (cmd) {
@@ -188,6 +230,17 @@ function commandRoute(name: string | undefined): 'catalog' | 'cart' | 'orders' |
 
 async function save(ctx: Ctx): Promise<void> {
   await db.saveSession(ctx.env.DB, ctx.s);
+}
+
+/** Clears the current step; leaving a checkout restores the main menu and says so. */
+async function leaveStep(ctx: Ctx): Promise<void> {
+  const step = ctx.s.step;
+  if (!step || step.startsWith('lang:')) return;
+  ctx.s.step = null;
+  await save(ctx);
+  if (CHECKOUT_STEPS.has(step)) {
+    await sendMessage(ctx.env, ctx.chatId, T[ctx.lang].checkoutCancelled, mainMenu(ctx.lang));
+  }
 }
 
 async function askLang(ctx: Ctx): Promise<void> {
@@ -252,6 +305,9 @@ async function showProduct(ctx: Ctx, id: string): Promise<void> {
   const altIds = (p.alternatives ?? '').split(',').filter((a) => ID_RE.test(a));
   const alts = [...(await db.getProductsByIds(ctx.env.DB, altIds)).values()];
   const card = productCard(p, ctx.lang, alts);
+  // The card ends with "how many?": a number typed next goes into the cart for this product.
+  ctx.s.step = `qty?:${p.id}`;
+  await save(ctx);
   const photo = p.photo_file_id || p.photo_url;
   if (photo) {
     try {
@@ -306,7 +362,7 @@ async function addToCart(ctx: Ctx, id: string, qty: number): Promise<string | un
   await sendMessage(
     ctx.env,
     ctx.chatId,
-    t.added(esc(productName(p, ctx.lang)), total),
+    t.added(esc(productName(p, ctx.lang)), qty, total),
     inline([
       [{ text: t.goToCart, callback_data: 'cart' }],
       [{ text: t.continueShopping, callback_data: `c:${p.category}` }],
@@ -315,10 +371,19 @@ async function addToCart(ctx: Ctx, id: string, qty: number): Promise<string | un
   return '✅';
 }
 
-async function onQuantity(ctx: Ctx, id: string, text: string): Promise<void> {
+/**
+ * A typed quantity. After "✍️ Other amount" (soft = false) anything else is an error;
+ * after merely viewing a card (soft = true) other text is a question for the operators.
+ */
+async function onQuantity(ctx: Ctx, msg: TgMessage, id: string, soft: boolean): Promise<void> {
   const t = T[ctx.lang];
-  const qty = /^\s*\d{1,5}\s*$/.test(text) ? Number(text) : NaN;
-  if (!Number.isInteger(qty) || qty < 1 || qty > MAX_QTY) {
+  const qty = parseQty(msg.text ?? '');
+  if (qty === null) {
+    if (soft) {
+      ctx.s.step = null;
+      await save(ctx);
+      return forwardToOperator(ctx, msg);
+    }
     await sendMessage(ctx.env, ctx.chatId, t.badQty(MAX_QTY));
     return;
   }
@@ -330,10 +395,10 @@ async function onQuantity(ctx: Ctx, id: string, text: string): Promise<void> {
   }
 }
 
-async function showCart(ctx: Ctx, message?: TgMessage): Promise<void> {
+async function showCart(ctx: Ctx, message?: TgMessage, droppedBefore = false): Promise<void> {
   const { lines, dropped } = await pricedCart(ctx);
   const view = cartView(lines, ctx.lang);
-  const text = dropped ? `${T[ctx.lang].itemsDropped}\n\n${view.text}` : view.text;
+  const text = dropped || droppedBefore ? `${T[ctx.lang].itemsDropped}\n\n${view.text}` : view.text;
   await editOrSend(ctx.env, ctx.chatId, message, text, inline(view.keyboard));
 }
 
@@ -366,8 +431,9 @@ function cancelRow(lang: Lang): InlineKeyboard {
 }
 
 async function startCheckout(ctx: Ctx): Promise<void> {
-  const { lines } = await pricedCart(ctx);
-  if (!lines.length) return showCart(ctx);
+  const { lines, dropped } = await pricedCart(ctx);
+  if (!lines.length) return showCart(ctx, undefined, dropped);
+  if (dropped) await sendMessage(ctx.env, ctx.chatId, T[ctx.lang].itemsDropped);
   const saved = await db.getCustomer(ctx.env.DB, ctx.chatId);
   if (saved?.name && saved.phone && saved.region && saved.address) {
     ctx.s.draft = { name: saved.name, phone: saved.phone, region: saved.region, address: saved.address };
@@ -496,42 +562,60 @@ function orderItems(lines: PricedLine[]): db.OrderItem[] {
   }));
 }
 
-async function showConfirm(ctx: Ctx, message?: TgMessage): Promise<void> {
+/** Shows the summary and remembers exactly what it showed: confirming places that, nothing else. */
+async function showConfirm(ctx: Ctx, message?: TgMessage, notice?: string): Promise<void> {
   const { lines, dropped } = await pricedCart(ctx);
   if (!lines.length || !draftComplete(ctx.s.draft)) {
     ctx.s.step = null;
     await save(ctx);
-    return showCart(ctx);
+    return showCart(ctx, undefined, dropped);
   }
-  const view = confirmView(orderItems(lines), ctx.s.draft, ctx.lang);
-  const text = dropped ? `${T[ctx.lang].itemsDropped}\n\n${view.text}` : view.text;
-  await editOrSend(ctx.env, ctx.chatId, message, text, inline(view.keyboard));
+  const items = orderItems(lines);
+  ctx.s.draft.quote = quoteOf(items);
+  ctx.s.step = 'confirm';
+  await save(ctx);
+  const view = confirmView(items, ctx.s.draft, ctx.lang, dropped ? T[ctx.lang].itemsDropped : notice);
+  await editOrSend(ctx.env, ctx.chatId, message, view.text, inline(view.keyboard));
 }
 
 async function placeOrder(ctx: Ctx, message?: TgMessage): Promise<string | undefined> {
   const t = T[ctx.lang];
   if (ctx.s.step !== 'confirm') return t.staleButton;
   const { lines, dropped } = await pricedCart(ctx);
-  if (dropped || !lines.length || !draftComplete(ctx.s.draft)) {
-    // The catalog changed since the summary was shown: show the new summary instead.
-    await showConfirm(ctx);
+  const items = orderItems(lines);
+  if (!lines.length || !draftComplete(ctx.s.draft)) {
+    await showConfirm(ctx, undefined, dropped ? t.itemsDropped : undefined);
     return undefined;
   }
-  const items = orderItems(lines);
+  if (dropped || quoteOf(items) !== ctx.s.draft.quote) {
+    // Prices or the cart changed since the summary was shown: show the new one instead.
+    await showConfirm(ctx, undefined, dropped ? t.itemsDropped : t.quoteChanged);
+    return undefined;
+  }
+  const since = new Date(Date.now() - 86400_000).toISOString();
+  const phone = ctx.env.CONTACT_PHONE ? esc(ctx.env.CONTACT_PHONE) : null;
+  if ((await db.countOrdersSince(ctx.env.DB, ctx.chatId, since)) >= ORDERS_PER_DAY) {
+    await sendMessage(ctx.env, ctx.chatId, t.tooManyOrders(phone));
+    return undefined;
+  }
   const { sum, complete } = totals(items);
   const d = ctx.s.draft;
-  const orderId = await db.createOrderFromSession(ctx.env.DB, {
-    chat_id: ctx.chatId,
-    username: ctx.user.username ?? null,
-    lang: ctx.lang,
-    customer_name: d.name!,
-    phone: d.phone!,
-    region: d.region!,
-    address: d.address!,
-    note: d.note ?? null,
-    items,
-    total: complete ? sum : null,
-  });
+  const orderId = await db.createOrderFromSession(
+    ctx.env.DB,
+    {
+      chat_id: ctx.chatId,
+      username: ctx.user.username ?? null,
+      lang: ctx.lang,
+      customer_name: d.name!,
+      phone: d.phone!,
+      region: d.region!,
+      address: d.address!,
+      note: d.note ?? null,
+      items,
+      total: complete ? sum : null,
+    },
+    { sinceIso: since, max: ORDERS_PER_DAY },
+  );
   if (orderId === null) return t.staleButton;
   ctx.s.step = null;
   ctx.s.cart = [];
@@ -566,44 +650,43 @@ async function whoText(ctx: Ctx): Promise<string> {
 async function forwardToOperator(ctx: Ctx, msg: TgMessage): Promise<void> {
   const { env, chatId } = ctx;
   const t = T[ctx.lang];
-  const adminChat = adminChatId(env);
-  if (!adminChat) {
+  if (!adminChatId(env)) {
     await sendMessage(env, chatId, t.error);
     return;
   }
+  // Every photo of an album arrives as its own message: one header and one answer per album.
+  const album = msg.media_group_id ?? null;
+  if (album && (await db.mediaGroupSeen(env.DB, chatId, album))) {
+    await copyToOperators(env, chatId, msg.message_id, { chatId, orderId: null, kind: 'copy', mediaGroup: album });
+    return;
+  }
   const since = new Date(Date.now() - 86400_000).toISOString();
-  if ((await db.countRecentRelays(env.DB, chatId, since)) >= MESSAGES_PER_DAY) {
-    await sendMessage(env, chatId, t.tooManyMessages);
+  if ((await db.countInbound(env.DB, chatId, since)) >= MESSAGES_PER_DAY) {
+    await sendMessage(env, chatId, t.tooManyMessages(env.CONTACT_PHONE ? esc(env.CONTACT_PHONE) : null));
     return;
   }
   const who = await whoText(ctx);
   if (msg.text !== undefined) {
     const body = msg.text.slice(0, LIMITS.question);
-    const sent = await sendMessage(env, adminChat, `${A.question(who)}\n\n${esc(body)}\n\n${A.replyHint}`);
-    await db.addRelay(env.DB, sent.message_id, chatId, null);
+    await postToOperators(env, `${A.question(who)}\n\n${esc(body)}\n\n${A.replyHint}`, { chatId, orderId: null, kind: 'in' });
     await sendMessage(env, chatId, t.questionForwarded);
     return;
   }
-  // Photo, file, voice...: most often a payment receipt for the latest order.
-  const [last] = await db.listOrdersForChat(env.DB, chatId, 1);
+  // A photo or file is most often a payment receipt for the latest order.
+  const [last] = msg.photo || msg.document ? await db.listOrdersForChat(env.DB, chatId, 1) : [];
   const recent =
     last && last.status !== 'cancelled' && Date.now() - Date.parse(last.created_at) < 14 * 86400_000 ? last : undefined;
   const header = recent ? A.receipt(recent.id, who) : A.question(who);
-  const head = await sendMessage(env, adminChat, `${header}\n\n${A.replyHint}`);
-  await db.addRelay(env.DB, head.message_id, chatId, recent?.id ?? null);
-  const copy = await tg<{ message_id: number }>(env, 'copyMessage', {
-    chat_id: adminChat,
-    from_chat_id: chatId,
-    message_id: msg.message_id,
-  });
-  await db.addRelay(env.DB, copy.message_id, chatId, recent?.id ?? null);
+  const orderId = recent?.id ?? null;
+  await postToOperators(env, `${header}\n\n${A.replyHint}`, { chatId, orderId, kind: 'in', mediaGroup: album });
+  await copyToOperators(env, chatId, msg.message_id, { chatId, orderId, kind: 'copy', mediaGroup: album });
   await sendMessage(env, chatId, recent ? t.receiptForwarded(recent.id) : t.questionForwarded);
 }
 
 // ---------------------------------------------------------------------------
 // Inline buttons
 
-const NAVIGATION = new Set(['cats', 'c', 'p', 'a', 'cart', 'ord']);
+const NAVIGATION = new Set(['cats', 'c', 'p', 'a', 'cart', 'r', 'ord']);
 
 async function handleCallback(env: Env, cb: TgCallbackQuery, exec: ExecutionContext): Promise<void> {
   let toast: string | undefined;
@@ -643,10 +726,7 @@ async function customerCallback(ctx: Ctx, data: string, message: TgMessage): Pro
     await askLang(ctx);
     return undefined;
   }
-  if (NAVIGATION.has(kind) && s.step && !s.step.startsWith('lang:')) {
-    s.step = null;
-    await save(ctx);
-  }
+  if (NAVIGATION.has(kind)) await leaveStep(ctx);
 
   switch (kind) {
     case 'cats':

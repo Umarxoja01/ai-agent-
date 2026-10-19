@@ -27,7 +27,9 @@ var COLUMNS = [
   ['telegram', 'Telegram'],
   ['chat_id', 'Chat ID'],
   ['updated', 'Yangilandi'],
+  ['version', 'Versiya'],
 ];
+var VERSION_COL = COLUMNS.length; // last column, 1-based
 
 function doPost(e) {
   var body;
@@ -59,11 +61,16 @@ function upsert(order) {
     sheet.setFrozenRows(1);
   }
   var row = COLUMNS.map(function (c) { return safe(order[c[0]]); });
+  // Leading apostrophe keeps the ISO time as text, so Sheets does not turn it into a date.
+  row[VERSION_COL - 1] = "'" + String(order.version || '');
   var last = sheet.getLastRow();
   if (last > 1) {
     var ids = sheet.getRange(2, 1, last - 1, 1).getValues();
+    var versions = sheet.getRange(2, VERSION_COL, last - 1, 1).getValues();
     for (var i = 0; i < ids.length; i++) {
       if (String(ids[i][0]) === String(order.id)) {
+        // An older push that arrived late must not overwrite a newer status.
+        if (String(versions[i][0]) > String(order.version || '')) return;
         sheet.getRange(i + 2, 1, 1, row.length).setValues([row]);
         return;
       }

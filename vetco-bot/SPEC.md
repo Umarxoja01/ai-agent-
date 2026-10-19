@@ -38,9 +38,9 @@ Keyingi buyurtmada: "Oldingi maʼlumotlar: … Shulardan foydalanaymi?" ─► i
 
 ## Preparat kartasi
 
-Nomi (lotin + kirill), tavsif, ishlab chiqaruvchi, shakli, taʼsir etuvchi modda, narx yoki "operator aytadi",
-omborda bor/yoʻq, muqobil preparatlar (masalan Kefen ↔ Fluneks), doimiy ogohlantirish:
-"Qoʻllashdan oldin yoʻriqnomani oʻqing va veterinar bilan maslahatlashing."
+Nomi (lotin + kirill), tavsif, ishlab chiqaruvchi, chiqarilish shakli, taʼsir etuvchi modda (xalqaro nom), narx yoki
+"operator aytadi", omborda bor/yoʻq, muqobil preparatlar (masalan Kefen ↔ Fluneks), doimiy ogohlantirish:
+"Qoʻllashdan oldin yoʻriqnomani oʻqing va veterinar bilan maslahatlashing. Goʻsht va sut uchun kutish muddatiga rioya qiling."
 
 **Doza faqat `dose_verified = ha` boʻlsa koʻrsatiladi.** Hozirgi dozalar Umarning soʻzlari (OTAVALIKA chati,
 2026-09-17), rasmiy yoʻriqnoma bilan tekshirilmagan — shuning uchun boshlangʻich katalogda yashirin.
@@ -61,8 +61,11 @@ toʻlovni operator chek boʻyicha tekshiradi.
 ## Kafolatlar
 
 - "Tasdiqlash"ni ikki marta bosish bitta buyurtma yaratadi (bitta tranzaksiya, holat sharti).
-- Telegram bir update'ni qayta yuborsa, u bir marta ishlanadi.
-- Operatorlar chatiga yetmagan buyurtma kartasi har 15 daqiqada qayta yuboriladi.
+- Mijoz faqat koʻrgan xulosasini tasdiqlaydi: narx yoki savat oʻzgarsa, yangi xulosa koʻrsatiladi.
+- Telegram bir update'ni qayta yuborsa, u bir marta ishlanadi; bazaga birinchi yozuv xato bersa, Telegram qayta yuboradi.
+- Operatorlar chatiga yetmagan buyurtma kartasi har 15 daqiqada qayta yuboriladi; guruh supergroup'ga aylansa, bot ergashadi.
+- Yarim qolgan buyurtma 30 daqiqada unutiladi; rasm/chek/ovoz har qanday bosqichda operatorga yetadi.
+- Bitta chatdan sutkasiga koʻpi bilan 5 ta buyurtma va 30 ta xabar (albom = 1 xabar) — spamdan himoya.
 - Boʻsh yoki buzilgan Google Sheet katalogni oʻchirmaydi.
 - Mijoz matni hamma joyda HTML-escape qilinadi; CSV eksportda formula sifatida ishlamaydi.
 - Sirlar (token, kalitlar) faqat `wrangler secret`da, git'da yoʻq.

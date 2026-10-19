@@ -13,8 +13,8 @@ export interface Call {
 
 export interface MockOptions {
   csv?: string;
-  /** Return an error description to make that Telegram call fail. */
-  fail?: (method: string, params: Record<string, any>) => string | undefined;
+  /** Return an error description (or a full error body) to make that Telegram call fail. */
+  fail?: (method: string, params: Record<string, any>) => string | { description: string; parameters?: object } | undefined;
   sheets?: (body: any) => Response;
 }
 
@@ -30,12 +30,15 @@ export function mockNetwork(opts: MockOptions = {}) {
       const params = init?.body ? JSON.parse(String(init.body)) : {};
       calls.push({ method, params });
       const error = opts.fail?.(method, params);
-      if (error) return Response.json({ ok: false, error_code: 400, description: error });
+      if (typeof error === 'string') return Response.json({ ok: false, error_code: 400, description: error });
+      if (error) return Response.json({ ok: false, error_code: 400, ...error });
       let result: unknown = true;
       if (method === 'sendMessage' || method === 'sendPhoto' || method === 'copyMessage') {
         result = { message_id: ++nextMessageId, chat: { id: params.chat_id, type: 'private' }, date: 0, text: params.text };
       } else if (method === 'getMe') {
         result = { id: 1, is_bot: true, first_name: 'VETCO', username: 'vetco_test_bot' };
+      } else if (method === 'getChat') {
+        result = { id: params.chat_id, type: 'supergroup', title: 'VETCO buyurtmalar' };
       } else if (method === 'getFile') {
         result = { file_id: params.file_id, file_path: 'photos/file_1.jpg' };
       }

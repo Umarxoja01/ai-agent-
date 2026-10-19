@@ -1,10 +1,10 @@
 import type { Env } from './env';
 import * as db from './db';
-import { notifyNewOrder } from './admin';
+import { ADMIN_CHAT_OVERRIDE, adminChatId, notifyNewOrder, withAdminChatOverride } from './admin';
 import { handleUpdate } from './bot';
 import { syncCatalog } from './catalog';
 import { pushOrder, sheetRow } from './sheets';
-import { tg, type TgUpdate } from './tg';
+import { TgError, tg, type TgUpdate } from './tg';
 import { bearerOk, json, nowIso, safeEqual } from './util';
 import { catalogPage, productImage } from './web';
 
@@ -28,12 +28,16 @@ export default {
     }
   },
 
-  async scheduled(controller: ScheduledController, env: Env, exec: ExecutionContext): Promise<void> {
-    if (controller.cron === CRON_SYNC && env.CATALOG_CSV_URL) {
-      const report = await syncCatalog(env);
-      console.log(`catalog sync: ok=${report.ok} total=${report.total} active=${report.active} errors=${report.errors.length}`);
+  async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+    // Both crons fire at 03:00; only the 15-minute one retries, so nothing is sent twice.
+    if (controller.cron === CRON_SYNC) {
+      if (env.CATALOG_CSV_URL) {
+        const report = await syncCatalog(env);
+        console.log(`catalog sync: ok=${report.ok} total=${report.total} active=${report.active} errors=${report.errors.length}`);
+      }
+      return;
     }
-    await retryPending(env);
+    await retryPending(await withAdminChatOverride(env));
   },
 } satisfies ExportedHandler<Env>;
 
@@ -47,6 +51,17 @@ async function telegramWebhook(request: Request, env: Env, exec: ExecutionContex
   } catch {
     return new Response('ok');
   }
+  if (!Number.isSafeInteger(update.update_id)) return new Response('ok');
+  // Nothing has happened yet if this first write fails: ask Telegram to deliver again.
+  let fresh: boolean;
+  try {
+    fresh = await db.markUpdate(env.DB, update.update_id);
+    env = await withAdminChatOverride(env);
+  } catch (err) {
+    console.error(`update ${update.update_id}: ${err instanceof Error ? err.message : err}`);
+    return new Response('retry', { status: 503 });
+  }
+  if (!fresh) return new Response('ok');
   try {
     await handleUpdate(env, update, exec);
   } catch (err) {
@@ -57,8 +72,20 @@ async function telegramWebhook(request: Request, env: Env, exec: ExecutionContex
 }
 
 async function health(env: Env): Promise<Response> {
-  const row = await env.DB.prepare('SELECT COUNT(*) AS n FROM products WHERE active = 1').first<{ n: number }>();
-  return json({ ok: true, products: row?.n ?? 0, catalog_synced_at: await db.getMeta(env.DB, 'catalog_synced_at') });
+  const row = await env.DB.prepare(
+    `SELECT (SELECT COUNT(*) FROM products WHERE active = 1) AS products,
+            (SELECT COUNT(*) FROM orders WHERE admin_message_id IS NULL) AS unsent_cards`,
+  ).first<{ products: number; unsent_cards: number }>();
+  const moved = await db.getMeta(env.DB, ADMIN_CHAT_OVERRIDE);
+  return json({
+    ok: true,
+    products: row?.products ?? 0,
+    // Orders the operators have not seen yet: should be 0.
+    unsent_cards: row?.unsent_cards ?? 0,
+    catalog_synced_at: await db.getMeta(env.DB, 'catalog_synced_at'),
+    cron_at: await db.getMeta(env.DB, 'cron_at'),
+    ...(moved ? { admin_chat_moved: `${moved.replace('>', ' -> ')}: update ADMIN_CHAT_ID` } : {}),
+  });
 }
 
 async function api(request: Request, env: Env, url: URL, path: string): Promise<Response> {
@@ -87,7 +114,7 @@ async function api(request: Request, env: Env, url: URL, path: string): Promise<
     return json(report, report.ok ? 200 : 422);
   }
 
-  if (request.method === 'POST' && path === '/api/setup') return setup(env, url);
+  if (request.method === 'POST' && path === '/api/setup') return setup(await withAdminChatOverride(env), url);
 
   return json({ ok: false, error: 'not found' }, 404);
 }
@@ -105,8 +132,8 @@ async function setup(env: Env, url: URL): Promise<Response> {
     allowed_updates: ['message', 'callback_query'],
     max_connections: 20,
   });
-  await tg(env, 'setMyCommands', {
-    commands: [
+  const customer = {
+    uz: [
       { command: 'start', description: 'Boshlash' },
       { command: 'catalog', description: 'Katalog' },
       { command: 'cart', description: 'Savat' },
@@ -114,10 +141,7 @@ async function setup(env: Env, url: URL): Promise<Response> {
       { command: 'contact', description: 'Aloqa' },
       { command: 'lang', description: 'Til / Язык' },
     ],
-  });
-  await tg(env, 'setMyCommands', {
-    language_code: 'ru',
-    commands: [
+    ru: [
       { command: 'start', description: 'Начать' },
       { command: 'catalog', description: 'Каталог' },
       { command: 'cart', description: 'Корзина' },
@@ -125,9 +149,42 @@ async function setup(env: Env, url: URL): Promise<Response> {
       { command: 'contact', description: 'Контакты' },
       { command: 'lang', description: 'Til / Язык' },
     ],
-  });
+  };
+  const privateChats = { type: 'all_private_chats' };
+  await tg(env, 'setMyCommands', { scope: privateChats, commands: customer.uz });
+  await tg(env, 'setMyCommands', { scope: privateChats, language_code: 'ru', commands: customer.ru });
+  // Groups get no customer commands: they do nothing there.
+  await tg(env, 'setMyCommands', { commands: [] });
   const warnings: string[] = [];
-  if (!env.ADMIN_CHAT_ID?.trim()) warnings.push('ADMIN_CHAT_ID is empty: orders will not reach anyone');
+  const adminChat = adminChatId(env);
+  if (!adminChat) {
+    warnings.push('ADMIN_CHAT_ID is empty: orders will not reach anyone');
+  } else {
+    try {
+      const chat = await tg<{ type: string; title?: string }>(env, 'getChat', { chat_id: adminChat });
+      if (chat.type === 'group') {
+        warnings.push(
+          'ADMIN_CHAT_ID is a basic group. Telegram gives it a new id when it becomes a supergroup; the bot follows ' +
+            'the move, but convert it now (group settings > Chat history for new members: Visible) and update ADMIN_CHAT_ID',
+        );
+      }
+      if (chat.type !== 'private') {
+        await tg(env, 'setMyCommands', {
+          scope: { type: 'chat', chat_id: adminChat },
+          commands: [
+            { command: 'orders', description: 'Ochiq buyurtmalar' },
+            { command: 'order', description: 'Buyurtma kartasi: /order 12' },
+            { command: 'stats', description: 'Statistika' },
+            { command: 'sync', description: 'Katalogni yangilash' },
+            { command: 'help', description: 'Operator buyruqlari' },
+            { command: 'id', description: 'Chat ID' },
+          ],
+        });
+      }
+    } catch (err) {
+      warnings.push(`ADMIN_CHAT_ID ${adminChat}: ${err instanceof TgError ? err.description : err} (is the bot in that chat?)`);
+    }
+  }
   if (env.BOT_USERNAME && env.BOT_USERNAME.replace(/^@/, '') !== me.username) {
     warnings.push(`BOT_USERNAME is "${env.BOT_USERNAME}" but the token belongs to @${me.username}`);
   }
@@ -150,7 +207,6 @@ export async function retryPending(env: Env): Promise<void> {
   if (env.SHEETS_WEBHOOK_URL) {
     for (const order of await db.listUnsyncedOrders(env.DB, 10)) await pushOrder(env, order);
   }
-  const weekAgo = new Date(Date.now() - 7 * 86400_000).toISOString();
-  await env.DB.prepare('DELETE FROM processed_updates WHERE created_at < ?').bind(weekAgo).run();
+  await db.pruneOld(env.DB);
   await db.setMeta(env.DB, 'cron_at', nowIso());
 }
