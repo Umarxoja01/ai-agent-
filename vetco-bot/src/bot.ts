@@ -58,10 +58,24 @@ export const ORDERS_PER_DAY = 5;
 const STEP_TTL_MS = 30 * 60_000;
 const CHECKOUT_STEPS = new Set(['name', 'phone', 'region', 'address', 'note', 'saved', 'confirm']);
 /** Message contents copyMessage can copy; service messages (pins, timers...) are not among them. */
-const COPYABLE = ['photo', 'document', 'video', 'voice', 'audio', 'video_note', 'animation', 'sticker', 'location', 'venue', 'poll', 'dice'];
+const COPYABLE = [
+  'photo', 'document', 'video', 'voice', 'audio', 'video_note', 'animation', 'sticker',
+  'location', 'venue', 'poll', 'dice', 'story', 'checklist',
+];
+/** Content a customer can send but copyMessage refuses. */
+const NOT_COPYABLE = ['paid_media', 'giveaway', 'giveaway_winners', 'invoice', 'game'];
 
-function copyable(msg: TgMessage): boolean {
-  return COPYABLE.some((k) => (msg as unknown as Record<string, unknown>)[k] !== undefined);
+function has(msg: TgMessage, keys: string[]): boolean {
+  return keys.some((k) => (msg as unknown as Record<string, unknown>)[k] !== undefined);
+}
+
+/** The product a message's "how many?" buttons belong to, for a reply to a product card. */
+function cardProduct(msg: TgMessage | undefined): string | null {
+  for (const b of msg?.reply_markup?.inline_keyboard?.flat() ?? []) {
+    const m = /^[aq]:([a-z0-9][a-z0-9_-]{0,39})(?::|$)/.exec(b.callback_data ?? '');
+    if (m) return m[1]!;
+  }
+  return null;
 }
 
 /** "15", "15 ta", "15 шт", "15 флаконов" */
@@ -193,13 +207,19 @@ async function handleMessage(env: Env, msg: TgMessage, exec: ExecutionContext): 
   }
   if (msg.text === undefined && !msg.contact) {
     // Photos, files and voice notes always go to the operators (often a payment receipt).
-    if (copyable(msg)) return forwardToOperator(ctx, msg);
+    if (has(msg, COPYABLE)) return forwardToOperator(ctx, msg);
+    if (has(msg, NOT_COPYABLE)) await sendMessage(env, chatId, T[ctx.lang].cantForward);
     return; // a pin or another service message: nothing to pass on
   }
 
   if (step.startsWith('qty:')) return onQuantity(ctx, msg, step.slice(4), false);
+  // A number sent as a reply to a product card is a quantity for that card, whatever the step.
+  const repliedCard = cardProduct(msg.reply_to_message);
+  if (repliedCard && !cmd && !CHECKOUT_STEPS.has(step) && parseQty(text) !== null) {
+    return onQuantity(ctx, msg, repliedCard, true);
+  }
   if (step.startsWith('qty?:')) {
-    // An unknown command or a reply to another message is not an answer to "how many?".
+    // An unknown command or a reply to some other message is not an answer to "how many?".
     if (cmd || msg.reply_to_message) {
       s.step = null;
       await save(ctx);
@@ -711,8 +731,14 @@ async function forwardToOperator(ctx: Ctx, msg: TgMessage): Promise<void> {
     last && last.status !== 'cancelled' && Date.now() - Date.parse(last.created_at) < 14 * 86400_000 ? last : undefined;
   const header = recent ? A.receipt(recent.id, who) : A.question(who);
   const orderId = recent?.id ?? null;
-  await postToOperators(env, `${header}\n\n${A.replyHint}`, { chatId, orderId, kind: 'in' });
-  await copyToOperators(env, chatId, msg.message_id, { chatId, orderId, kind: 'copy' });
+  try {
+    await postToOperators(env, `${header}\n\n${A.replyHint}`, { chatId, orderId, kind: 'in' });
+    await copyToOperators(env, chatId, msg.message_id, { chatId, orderId, kind: 'copy' });
+  } catch (err) {
+    // Let the album's next photo carry the header instead.
+    if (album) await db.releaseAlbum(env.DB, chatId, album);
+    throw err;
+  }
   await sendMessage(env, chatId, recent ? t.receiptForwarded(recent.id) : t.questionForwarded);
 }
 

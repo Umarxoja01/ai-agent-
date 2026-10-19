@@ -372,6 +372,14 @@ export async function countInbound(db: D1Database, chatId: number, sinceIso: str
   return row?.n ?? 0;
 }
 
+/** Drops the "how many?" step of a product card without touching the rest of the session. */
+export async function clearSoftStep(db: D1Database, chatId: number): Promise<void> {
+  await db
+    .prepare(`UPDATE sessions SET step = NULL, updated_at = ? WHERE chat_id = ? AND step LIKE 'qty?:%'`)
+    .bind(nowIso(), chatId)
+    .run();
+}
+
 export type AlbumOutcome = 'sent' | 'refused';
 
 /**
@@ -391,6 +399,11 @@ export async function claimAlbum(
     .run();
   if ((res.meta.changes ?? 0) > 0) return null;
   return (await getMeta(db, key))?.startsWith('refused|') ? 'refused' : 'sent';
+}
+
+/** Gives up a claim whose header never reached the operators, so the next photo posts it. */
+export async function releaseAlbum(db: D1Database, chatId: number, mediaGroup: string): Promise<void> {
+  await db.prepare('DELETE FROM meta WHERE key = ?').bind(`album:${chatId}:${mediaGroup}`).run();
 }
 
 /** Housekeeping for the cron: duplicate-update guard and old reply links. */

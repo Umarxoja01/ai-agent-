@@ -37,6 +37,7 @@ export interface TgMessage {
   document?: { file_id: string; mime_type?: string };
   contact?: { phone_number: string; first_name: string; user_id?: number };
   reply_to_message?: TgMessage;
+  reply_markup?: { inline_keyboard?: InlineButton[][] };
   /** Service message in a basic group that became a supergroup. */
   migrate_to_chat_id?: number;
 }

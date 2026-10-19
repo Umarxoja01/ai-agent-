@@ -152,7 +152,7 @@ curl https://<worker>/health     # products, unsent_cards (0 boʻlishi kerak), c
 ## Ishlab chiqish
 
 ```bash
-npm test             # 80 test: Workers runtime + D1 (miniflare), Telegram soxta
+npm test             # 84 test: Workers runtime + D1 (miniflare), Telegram soxta
 npm run typecheck
 npm run dev          # lokal; .dev.vars.example -> .dev.vars
 ```

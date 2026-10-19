@@ -267,10 +267,8 @@ export async function relayToCustomer(env: Env, msg: TgMessage, customerChatId: 
   const session = await db.getSession(env.DB, customerChatId);
   const lang = session.lang ?? 'uz';
   // The customer's next message answers the operator, not the "how many?" under a product card.
-  if (session.step?.startsWith('qty?:')) {
-    session.step = null;
-    await db.saveSession(env.DB, session);
-  }
+  // Only the step changes: this runs from the operators' chat, alongside the customer's own updates.
+  if (session.step?.startsWith('qty?:')) await db.clearSoftStep(env.DB, customerChatId);
   try {
     if (msg.text !== undefined) {
       await sendMessage(env, customerChatId, `${T[lang].operatorSays}\n${esc(msg.text)}`);

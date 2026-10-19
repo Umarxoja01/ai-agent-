@@ -524,3 +524,70 @@ describe('second review round', () => {
     if (view.truncated) expect(view.text).toContain(`yana ${40 - shown} ta preparat`);
   });
 });
+
+describe('third review round', () => {
+  it('a number sent as a reply to the product card goes into the cart', async () => {
+    const chat = 3601;
+    await onboard(chat);
+    await deliver(callbackUpdate(chat, 'p:kefen'));
+    const card = net.lastTo(chat)!;
+    net.clear();
+    await deliver(
+      textUpdate(chat, '10', {
+        reply_to_message: { message_id: 4, chat: { id: chat, type: 'private' }, date: 0, text: card.params.text, reply_markup: card.params.reply_markup },
+      }),
+    );
+    expect((await getSession(env.DB, chat)).cart).toEqual([{ id: 'kefen', qty: 10 }]);
+    expect(toAdmin()).toHaveLength(0);
+  });
+
+  it('a failed album header is posted by the next photo', async () => {
+    vi.restoreAllMocks();
+    let failed = false;
+    net = mockNetwork({
+      fail: (method, p) => {
+        if (!failed && method === 'sendMessage' && String(p.chat_id) === String(ADMIN_CHAT)) {
+          failed = true;
+          return 'Too Many Requests: retry after 1';
+        }
+        return undefined;
+      },
+    });
+    const chat = 3602;
+    await onboard(chat);
+    for (let i = 0; i < 3; i++) {
+      await deliver(messageUpdate(chat, { media_group_id: 'albF', photo: [{ file_id: `h${i}`, width: 9, height: 9 }] }));
+    }
+    const headers = toAdmin().filter((c) => c.method === 'sendMessage' && String(c.params.text).includes('Mijoz xabari'));
+    expect(headers).toHaveLength(2); // the failed attempt, then the one that got through
+    const inbound = await env.DB.prepare(`SELECT COUNT(*) AS n FROM relay WHERE chat_id = ? AND kind = 'in'`).bind(chat).first<{ n: number }>();
+    expect(inbound!.n).toBe(1);
+  });
+
+  it("an operator reply clears only the customer's soft step, never the cart", async () => {
+    const chat = 3603;
+    await onboard(chat);
+    await deliver(callbackUpdate(chat, 'a:butofan:3'));
+    await deliver(textUpdate(chat, 'Savol'));
+    await deliver(callbackUpdate(chat, 'p:kefen'));
+    const row = await env.DB.prepare(`SELECT admin_message_id FROM relay WHERE chat_id = ? AND kind = 'in'`).bind(chat).first<{ admin_message_id: number }>();
+    await deliver(
+      messageUpdate(ADMIN_CHAT, { text: 'Javob', reply_to_message: { message_id: row!.admin_message_id, chat: { id: ADMIN_CHAT, type: 'supergroup' }, date: 0 } }, 777),
+    );
+    const s = await getSession(env.DB, chat);
+    expect(s.step).toBeNull();
+    expect(s.cart).toEqual([{ id: 'butofan', qty: 3 }]);
+  });
+
+  it('forwards a story and explains content that cannot be passed on', async () => {
+    const chat = 3604;
+    await onboard(chat);
+    net.clear();
+    await deliver(messageUpdate(chat, { story: { chat: { id: -100555, type: 'channel' }, id: 7 } }));
+    expect(net.of('copyMessage')).toHaveLength(1);
+    net.clear();
+    await deliver(messageUpdate(chat, { paid_media: { star_count: 5, paid_media: [] } }));
+    expect(toAdmin()).toHaveLength(0);
+    expect(net.lastTo(chat)!.params.text).toContain('operatorga yubora olmayman');
+  });
+});
