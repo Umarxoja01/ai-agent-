@@ -1,0 +1,22 @@
+{
+  "name": "fermer-bot",
+  "version": "0.1.0",
+  "description": "Fermer hisobchisi: Telegram bot - sut, daromad, xarajat va foyda hisobi (har fermer uchun alohida)",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "vitest run",
+    "start": "node --no-warnings --env-file-if-exists=.env dist/main.js",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "typescript": "^5.6.3",
+    "vitest": "^4.1.12"
+  }
+}
