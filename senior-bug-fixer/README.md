@@ -1,5 +1,7 @@
 # Senior Bug Fixer — Claude Managed Agent
 
+> Bepul variant (Claude Code obunasi ichida, `/fix` buyrug'i): [`claude-code-skill/`](claude-code-skill/README.md)
+
 Bag tavsifini (yoki GitHub issue raqamini) berasiz. Agent quyidagilarni bajaradi:
 
 1. bagni **yiqiladigan test** bilan takrorlaydi;
