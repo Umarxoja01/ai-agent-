@@ -1,0 +1,10 @@
+# Cloud sandbox: package managers (npm, pip, ...) and the GitHub MCP server
+# are reachable; everything else is blocked.
+name: senior-bug-fixer-env
+config:
+  type: cloud
+  networking:
+    type: limited
+    allow_package_managers: true
+    allow_mcp_servers: true
+    allowed_hosts: []

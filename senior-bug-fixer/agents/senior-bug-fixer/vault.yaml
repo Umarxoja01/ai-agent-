@@ -1,0 +1,4 @@
+# The container for the GitHub MCP credential. The token itself is added with
+# `ant beta:vaults:credentials create` (see README.md) and never lives in a file.
+type: vault
+display_name: senior-bug-fixer
